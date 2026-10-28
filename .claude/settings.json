@@ -1,0 +1,102 @@
+{
+  "env": {
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  },
+  "permissions": {
+    "deny": [
+      "mcp__exava",
+      "Edit(.claude/**)",
+      "Write(.claude/**)",
+      "NotebookEdit(.claude/**)",
+      "mcp__Gmail__apply_sensitive_message_label",
+      "mcp__Gmail__apply_sensitive_thread_label",
+      "mcp__Gmail__create_draft",
+      "mcp__Gmail__create_label",
+      "mcp__Gmail__delete_draft",
+      "mcp__Gmail__delete_label",
+      "mcp__Gmail__forward",
+      "mcp__Gmail__label_message",
+      "mcp__Gmail__label_thread",
+      "mcp__Gmail__mark_message_spam",
+      "mcp__Gmail__mark_thread_spam",
+      "mcp__Gmail__trash_message",
+      "mcp__Gmail__trash_thread",
+      "mcp__Gmail__untrash_message",
+      "mcp__Gmail__untrash_thread",
+      "mcp__Gmail__update_draft",
+      "mcp__Gmail__update_label",
+      "mcp__Google_Drive__share_file",
+      "mcp__Google-Drive__share_file",
+      "mcp__Google_Drive__trash_file",
+      "mcp__Google-Drive__trash_file",
+      "mcp__Google_Calendar__create_event",
+      "mcp__Google-Calendar__create_event",
+      "mcp__Google_Calendar__delete_event",
+      "mcp__Google-Calendar__delete_event",
+      "mcp__Google_Calendar__respond_to_event",
+      "mcp__Google-Calendar__respond_to_event",
+      "mcp__Google_Calendar__update_event",
+      "mcp__Google-Calendar__update_event"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/hintergrund-policy.mjs\" \"$d/hintergrund-policy.mjs\" && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/provider-vertrag.json\" \"$d/provider-vertrag.json\" && [ \"$(/usr/bin/sha256sum \"$d/hintergrund-policy.mjs\" | /usr/bin/cut -c1-64)\" = \"06073c8d95a7c664b4a022d072e92e85791f336c0858e1dd77cb953d3abc9a36\" ] && [ \"$(/usr/bin/sha256sum \"$d/provider-vertrag.json\" | /usr/bin/cut -c1-64)\" = \"004bbe61e27f11179307940b7c485a70fa1b38563e8b77f93d2e14f67fd6f332\" ] || { echo 'Gesperrt (G7): hintergrund-policy.mjs oder provider-vertrag.json verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/hintergrund-policy.mjs\"; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/sperre.mjs\" \"$d/sperre.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/sperre.mjs\" | /usr/bin/cut -c1-64)\" = \"bfa90a1483f799265a0cd9449cfa7a3ba4d6bbee37df9a007c568e572ae60d80\" ] || { echo 'Gesperrt (G7): sperre.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/sperre.mjs\"; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"2b65fc1bf28d23f27e0173cc5c8b06511a566f901ce9258e4a0ea4422a9eb4bb\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" pre; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"2b65fc1bf28d23f27e0173cc5c8b06511a566f901ce9258e4a0ea4422a9eb4bb\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" pre; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*|WebSearch|WebFetch|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"2b65fc1bf28d23f27e0173cc5c8b06511a566f901ce9258e4a0ea4422a9eb4bb\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" post; r=$?; /usr/bin/rm -rf \"$d\"; exit 0",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

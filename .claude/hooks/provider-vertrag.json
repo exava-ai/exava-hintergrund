@@ -1,0 +1,479 @@
+{
+  "version": "2026-10-14.1",
+  "server": {
+    "gmail": {
+      "apply_sensitive_message_label": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "apply_sensitive_thread_label": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "create_draft": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "create_label": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "delete_draft": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "delete_label": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "forward": {
+        "klasse": "versand",
+        "profile": [
+          "versand"
+        ],
+        "felder": [
+          "attachments",
+          "bcc",
+          "cc",
+          "forwardText",
+          "htmlBody",
+          "messageId",
+          "to"
+        ],
+        "schema_sha256": "6e3a5e7dffbb9a1ae89855379a57deb216c50cd37b57da6b9f0db57c05c77552"
+      },
+      "get_draft": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "draftId",
+          "messageFormat"
+        ],
+        "schema_sha256": "eead4a470f3cf66a48d0b792bd15f7c2b11f4f07db8fdcf8e80ed76a468d32bc"
+      },
+      "get_message": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest",
+          "versand"
+        ],
+        "felder": [
+          "messageFormat",
+          "messageId"
+        ],
+        "schema_sha256": "3b20c9fdd421a2506bf362ce9e007cfc4c7ef765090bd27742fb1340afbb9776",
+        "beobachtung": "thread"
+      },
+      "get_thread": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest",
+          "versand"
+        ],
+        "felder": [
+          "messageFormat",
+          "threadId"
+        ],
+        "schema_sha256": "842826af29696e6762f903a7645ce1139c6164aad894f08b88bc2e27bda27487",
+        "beobachtung": "thread"
+      },
+      "label_message": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "label_thread": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "list_drafts": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "pageSize",
+          "pageToken",
+          "query",
+          "view"
+        ],
+        "schema_sha256": "3b9d099dcb1d7dcd3c29648e673ac0b2d48d6f39fab6a1f32941c47be2849c87"
+      },
+      "list_labels": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [],
+        "schema_sha256": "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49"
+      },
+      "mark_message_spam": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "mark_thread_spam": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "reply": {
+        "klasse": "versand",
+        "profile": [
+          "versand"
+        ],
+        "felder": [
+          "attachments",
+          "bcc",
+          "body",
+          "cc",
+          "htmlBody",
+          "messageId",
+          "replyAll",
+          "to"
+        ],
+        "schema_sha256": "7aeef06c96f0d9c730a32ad72f1f095292898557cbe5c3129d55ff6963718f6d"
+      },
+      "search_threads": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "includeTrash",
+          "pageSize",
+          "pageToken",
+          "query",
+          "view"
+        ],
+        "schema_sha256": "a365a45d631acfcefc7f82f7e6840163a35c65cd94f9015873d89c0020564ad1"
+      },
+      "send_message": {
+        "klasse": "versand",
+        "profile": [
+          "versand"
+        ],
+        "felder": [
+          "attachments",
+          "bcc",
+          "body",
+          "cc",
+          "draftId",
+          "htmlBody",
+          "replyThreadId",
+          "replyToMessageId",
+          "subject",
+          "to"
+        ],
+        "schema_sha256": "39ffc999a6b756138494ec6a7ffedc0d5dba1f1c2d3f6ed8c6a77d1087686a28"
+      },
+      "trash_message": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "trash_thread": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "unlabel_message": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "unlabel_thread": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "unmark_message_spam": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "unmark_thread_spam": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "untrash_message": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "untrash_thread": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "update_draft": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "update_label": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "update_message_labels": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      }
+    },
+    "google_drive": {
+      "copy_file": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "create_file": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "download_file_content": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "exportMimeType",
+          "fileId",
+          "revisionId"
+        ],
+        "schema_sha256": "323ce109d989146b0a40d842cf8fd809cd52582beb2e5195d47ca935aa877711"
+      },
+      "get_file_metadata": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "excludeContentSnippets",
+          "fileId",
+          "snippetVerbosity"
+        ],
+        "schema_sha256": "f3f34be694825ab0fb837afeffea907aa2989152f1b1ba5aa9e2906b59a09a39"
+      },
+      "get_file_permissions": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "fileId"
+        ],
+        "schema_sha256": "10415062e6bc52cbfe145d7fa3e406fe79a105d639166f627f59fe8e468d5d47"
+      },
+      "list_recent_files": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "excludeContentSnippets",
+          "orderBy",
+          "pageSize",
+          "pageToken",
+          "snippetVerbosity"
+        ],
+        "schema_sha256": "df8ed14135138487f19f9b8b9f5ce8a4d3c4341da9ee764b751a7ec242c0451c"
+      },
+      "read_file_content": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "fileId",
+          "includeComments"
+        ],
+        "schema_sha256": "706e079af338f825c96ead77cb36d5a1d56f652cca61c5eed8937642ccaadf28"
+      },
+      "search_files": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "excludeContentSnippets",
+          "pageSize",
+          "pageToken",
+          "query",
+          "snippetVerbosity"
+        ],
+        "schema_sha256": "5c51e232b1c81a9cd78a43d508e0a6e74079147d05e970cec24b14e8816144f5"
+      },
+      "share_file": {
+        "klasse": "versand",
+        "profile": [
+          "versand"
+        ],
+        "felder": [
+          "emailAddress",
+          "fileId",
+          "role"
+        ],
+        "schema_sha256": "695e36c3db5c833944433e592c0fc2e8af48e4b1797f1fe071c25961425900b1"
+      },
+      "trash_file": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "update_file": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      }
+    },
+    "google_calendar": {
+      "create_event": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "delete_event": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "get_event": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "calendarId",
+          "eventId"
+        ],
+        "schema_sha256": "ce213bc4c2d8c9c670e5b83dd576316410ae4ab5dbb3dfd2ab853d595723e9d0"
+      },
+      "list_calendars": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "pageSize",
+          "pageToken"
+        ],
+        "schema_sha256": "f432ff05594d9244f2356204910fc2d6dd39ed47bfcbc45c42d1c093b90fa94a"
+      },
+      "list_events": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "calendarId",
+          "endTime",
+          "eventType",
+          "eventTypeFilter",
+          "fullText",
+          "orderBy",
+          "pageSize",
+          "pageToken",
+          "startTime",
+          "timeZone"
+        ],
+        "schema_sha256": "ffeac43439a39df2cfcaa399c9fca315b0f1e9d1c0693b604eee53e3caf4b79c"
+      },
+      "respond_to_event": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      },
+      "search_events": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "pageSize",
+          "pageToken",
+          "query"
+        ],
+        "schema_sha256": "112c5d6085b3aee21d686aa2b65ba7368c0e2550e720fa802dde8251f89260e6"
+      },
+      "suggest_time": {
+        "klasse": "lesen",
+        "profile": [
+          "recherche",
+          "ingest"
+        ],
+        "felder": [
+          "attendeeEmails",
+          "durationMinutes",
+          "endTime",
+          "preferences",
+          "startTime",
+          "timeZone"
+        ],
+        "schema_sha256": "ce96c839082ca61605f65dfe7f911da86293c38022d52e0388eba821b032265c"
+      },
+      "update_event": {
+        "klasse": "gesperrt",
+        "profile": [],
+        "felder": [],
+        "schema_sha256": null
+      }
+    }
+  }
+}
