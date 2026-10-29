@@ -11,6 +11,8 @@
 //            nach arbeit/drive-<fileId>.<endung> und merkt die SHA-256 in lease.originale; die Policy lässt curl PUT im Auftrag belegsuche nur für eine gemerkte Prüfsumme zu.
 //            Ebenso Gmail get_message mit messageFormat RAW: PDF-/Bild-Anhänge (MIME, base64) nach arbeit/gmail-<messageId>-<n>.<endung>.
 //            A-657 GO pdf.py: ohne solchen Anhang die Rohmail nach arbeit/gmail-<messageId>.eml (lease.rohmails); Bash pdf.py --mail dazu → erzeugte PDF in lease.originale.
+//            A-846 (E-1143): ebenso in den Entwurfsaufträgen SPIEGEL_ARTEN (Original für den Anhang eines Entwurfs, EXAVA-Storage) – prepare_file_upload purpose dokument_original
+//            merkt URL und Prüfsumme in lease.spiegel; die Policy lässt curl PUT dorthin nur für genau dieses gemerkte Original zu.
 //            A-657/A-658: arbeit_holen eines Belegsuche-Auftrags mit job.bezug.csv → lease.csv (die Policy lässt dann Write und Upload der CSV zu).
 //            A-642: Ist das Ergebnis größer als MAX_MCP_OUTPUT_TOKENS, liest der Hook die von Claude Code gespeicherte Ausgabe (<session_id>/tool-results/, gespeicherteAusgabe).
 //            A-626 WEB (nur Aufträge aus WEB_ARTEN, A-782): arbeit_holen → lease.web = Web-Adressen aus dem Auftragstext (job.eingabe ohne angehängten Gesprächsverlauf); WebSearch → Adressen der Treffer
@@ -240,11 +242,14 @@ function uploadHostMerken(eingabe, env) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
   if (!l || !leaseLesen(env) || alleObjekte(eingabe.tool_response).some((x) => x.isError === true || x.is_error === true)) return;
   const hosts = Array.isArray(l.upload_hosts) ? l.upload_hosts.filter((x) => typeof x === "string") : [];
+  const spiegel = Array.isArray(l.spiegel) ? l.spiegel.filter((x) => x && typeof x.url === "string" && typeof x.sha256 === "string") : [];
   for (const o of antwortObjekte(eingabe.tool_response)) {
     const url = o.upload_url ?? o.download_url; let u; try { u = new URL(String(url)); } catch { continue; } // A-600 FOLGE: download_url aus exava_datei_lesen
     if (typeof url === "string" && u.protocol === "https:" && /^[a-z0-9.-]{1,253}$/.test(u.host) && !hosts.includes(u.host) && hosts.length < 5) hosts.push(u.host);
+    // A-846: Upload-URL eines Originals für einen Anhang (purpose dokument_original) mit seiner Prüfsumme – die Policy lässt curl PUT dorthin nur für genau dieses Original zu
+    if (o.purpose === "dokument_original" && typeof o.upload_url === "string" && u.protocol === "https:" && /^[0-9a-f]{64}$/.test(String(o.sha256)) && spiegel.length < 10 && !spiegel.some((x) => x.url === o.upload_url)) spiegel.push({ url: o.upload_url, sha256: String(o.sha256) });
   }
-  writeFileSync(leasePfad(env), JSON.stringify({ ...l, upload_hosts: hosts }));
+  writeFileSync(leasePfad(env), JSON.stringify({ ...l, upload_hosts: hosts, ...(spiegel.length ? { spiegel } : {}) }));
 }
 /** A-626 WEB: wortgleich in hintergrund-policy.mjs (scripts/test/a529-vorlage.ts prüft die Gleichheit). */
 export function webAdresse(x) {
@@ -257,6 +262,8 @@ export function webAdresse(x) {
 export const WEB_MAX = 3000;
 /** A-782: wortgleich in hintergrund-policy.mjs (scripts/test/a782-entschlackung.ts prüft die Gleichheit). */
 export const WEB_ARTEN = new Set(["arbeit", "ablage", "mail_vorbereitung", "antwort"]);
+/** A-846 (E-1143): Entwurfsaufträge, in denen der Hook Originale für Anhänge ablegt (dokument_original) – wortgleich in hintergrund-policy.mjs (scripts/test/a846-dokumente-anhaenge.ts). */
+export const SPIEGEL_ARTEN = new Set(["arbeit", "mail_vorbereitung", "antwort"]);
 /** A-626 WEB: Web-Adressen im Auftragstext – nur vor dem angehängten Gesprächsverlauf (auftragMitVerlauf, lib/antwort/recherche-auftrag.ts), Satzzeichen am Ende ab, höchstens 50. */
 export const textAdressen = (t) => [...String(t ?? "").split("\n\n[Bisheriger Gesprächsverlauf")[0].matchAll(/https?:\/\/[^\s<>"'()[\]{}]+/gi)]
   .map((m) => webAdresse(m[0].replace(/[.,;:!?]+$/, ""))).filter(Boolean).slice(0, 50);
@@ -328,7 +335,7 @@ function originalMerken(eingabe, env, quelle) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
   const id = quelle === "drive" ? eingabe.tool_input?.fileId : eingabe.tool_input?.messageId;
   const nurDatei = l?.art === "ablage" && quelle === "drive"; // A-659: Ablage braucht nur die Bytes für die Prüfsumme
-  if (!l || (l.art !== "belegsuche" && !nurDatei) || !leaseLesen(env) || typeof id !== "string" || !/^[A-Za-z0-9_-]{6,120}$/.test(id)) return;
+  if (!l || (l.art !== "belegsuche" && !SPIEGEL_ARTEN.has(l.art) && !nurDatei) || !leaseLesen(env) || typeof id !== "string" || !/^[A-Za-z0-9_-]{6,120}$/.test(id)) return; // A-846: SPIEGEL_ARTEN
   const objekte = alleObjekte(eingabe.tool_response);
   if (objekte.some((x) => x.isError === true || x.is_error === true)) return;
   const felder = quelle === "drive" ? ["blob", "data", "base64Content", "content", "contentBase64"] : ["raw"];
@@ -336,7 +343,7 @@ function originalMerken(eingabe, env, quelle) {
   const b64 = finden(objekte) ?? finden(gespeicherteAusgabe(eingabe, id)); // A-642: über MAX_MCP_OUTPUT_TOKENS steht nur der Pfad in der Antwort
   if (!b64) return;
   const bufs = quelle === "drive" ? [Buffer.from(b64, "base64")] : mimeAnhaenge(Buffer.from(b64, "base64").toString("latin1"));
-  if (quelle === "gmail" && !bufs.length) return rohmailMerken(l, id, Buffer.from(b64, "base64"), env); // A-657 GO pdf.py: Belegmail nur als HTML
+  if (quelle === "gmail" && !bufs.length) return l.art === "belegsuche" ? rohmailMerken(l, id, Buffer.from(b64, "base64"), env) : undefined; // A-657 GO pdf.py: Belegmail nur als HTML (nur Belegsuche)
   let originale = Array.isArray(l.originale) ? l.originale.filter((x) => x && typeof x.sha256 === "string" && typeof x.datei === "string") : [];
   const vorher = originale.length;
   bufs.forEach((buf, n) => {

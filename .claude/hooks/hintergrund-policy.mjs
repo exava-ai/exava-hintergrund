@@ -18,6 +18,8 @@
 //   lease.originale, hier über die Datei neu gerechnet); Write/Edit und pdf.py sind dort gesperrt – ein selbst erzeugtes Dokument ist nie ein Belegoriginal.
 //   A-657/A-658 (Go Bauherr 22.10.2026) dort nur: im CSV-Modus (lease.csv) einmal Write von arbeit/belegsuche-<kürzel>.csv und curl PUT dieser CSV; pdf.py --mail nur für eine vom Hook
 //   gesicherte Rohmail (lease.rohmails) – die PDF wird erst nach dem Lauf von pdf.py zum Original (PostToolUse in x-ausfuehrung.mjs). Edit, andere Ziele und Skripte bleiben gesperrt.
+//   A-846 (E-1143): in den Entwurfsaufträgen SPIEGEL_ARTEN ist ein curl PUT an eine gemerkte Upload-URL eines Originals (lease.spiegel, purpose dokument_original) nur für genau die Datei frei,
+//   die x-ausfuehrung.mjs aus Drive bzw. Gmail abgelegt hat (lease.originale, Prüfsumme hier neu gerechnet und gleich der angemeldeten).
 //   A-818 (G5, Go Bauherr 28.10.2026): im Ablage-Auftrag mit job.bezug.datev_paket zusätzlich curl -o und sha256sum genau dieser Paket-ZIP, die drei Ordner aus lease.datev und der ZIP-Platzhalter
 //   nur in den bestätigten Monatsordner (lease.datev_ziel); Löschen, Papierkorb, Teilen und Senden bleiben gesperrt.
 //   A-626 WEB (Go Bauherr 21.10.2026), A-782 (Go 26.10.2026): WebSearch und WebFetch nur in den Aufträgen aus WEB_ARTEN (webPruefen) – Suchtext ohne Mailadresse, IBAN und lange Nummer; WebFetch und curl -o aus dem Web
@@ -118,6 +120,7 @@ export function bashPruefen(ti) {
   if (!ti || typeof ti !== "object" || Object.keys(ti).some((k) => !["command", "description", "timeout"].includes(k))) return nein("Bash", "nur command, description, timeout (kein Hintergrund, keine Sandbox-Ausnahme).");
   const c = String(ti.command ?? "");
   if (leaseArt() === "belegsuche") return originalPruefen(c); // A-608 BELEG-ORIGINAL
+  const sp = spiegelPruefen(c); if (sp) return sp; // A-846: Original für einen Anhang
   const dl = BASH_LADEN_DATEV.exec(c), ds = BASH_SHA_DATEV.exec(c), d = leaseDatev(); // A-818 (G5): nur die Datei aus lease.datev, Laden nur vom Speicher-Host der Lease
   if (dl || ds) return !c.includes("..") && d && (dl ?? ds)[1] === `arbeit/${d.name}.zip` && (!dl || leaseUploadHosts().includes(dl[2].toLowerCase())) ? frei()
     : nein("Bash", "DATEV-Paket nur im Ablage-Auftrag mit job.bezug.datev_paket: curl -o arbeit/<name>.zip von der download_url aus exava_datei_lesen (Speicher-Host der Lease) und sha256sum dieser Datei.");
@@ -143,6 +146,18 @@ export function originalPruefen(c) {
   if (!h || !leaseOriginale().some((o) => o.sha256 === h && o.datei === m[1])) return nein("Bash", "Upload nur für das Original, das der Hook aus Drive download_file_content bzw. Gmail get_message RAW gemerkt hat (Prüfsumme).");
   return leaseUploadHosts().includes(m[2].toLowerCase()) ? frei() : nein("Bash", "curl PUT nur an den Host der Upload-URL aus prepare_file_upload (Lease).");
 }
+/** A-846 (E-1143): curl PUT an eine gemerkte Upload-URL eines Originals (lease.spiegel) nur in SPIEGEL_ARTEN und nur für genau das Original, das der Hook abgelegt hat (lease.originale)
+ *  und dessen Prüfsumme der Anmeldung entspricht. Erkannt am signierten Token der URL (nicht an der Schreibweise des Pfads); kein gemerkter Token → null (die übrigen Regeln gelten). */
+const uploadToken = (u) => { try { return new URL(u).searchParams.get("token") ?? ""; } catch { return ""; } };
+export function spiegelPruefen(c) {
+  const t = uploadToken(/"(https:\/\/[^"\s]+)"$/.exec(c)?.[1] ?? ""), z = t ? leaseSpiegel().find((x) => uploadToken(x.url) === t) : null;
+  if (!z) return null;
+  const m = BASH_CURL_ORIGINAL.exec(c);
+  if (!m || c.includes("..") || !SPIEGEL_ARTEN.has(leaseArt())) return nein("Bash", "Upload eines Originals für einen Anhang nur für die Datei, die der Hook aus Drive download_file_content bzw. Gmail get_message RAW abgelegt hat.");
+  const h = dateiSha(m[1]);
+  if (!h || h !== z.sha256 || !leaseOriginale().some((o) => o.sha256 === h && o.datei === m[1])) return nein("Bash", "Upload nur für das gemerkte Original mit genau der angemeldeten Prüfsumme.");
+  return leaseUploadHosts().includes(m[2].toLowerCase()) ? frei() : nein("Bash", "curl PUT nur an den Host der Upload-URL aus prepare_file_upload (Lease).");
+}
 /** SHA-256 einer regulären Datei im Projekt (kein Verweis); sonst "". */
 const dateiSha = (datei) => { try { const p = join(projektDir(), datei); return lstatSync(p).isFile() ? createHash("sha256").update(readFileSync(p)).digest("hex") : ""; } catch { return ""; } };
 /** Write/Edit: nur Dateien direkt unter arbeit/ im Projekt (kein Symlink, nichts unter .claude/); im Auftrag belegsuche nie (A-608 BELEG-ORIGINAL) –
@@ -165,6 +180,8 @@ export function leaseOrdner() { const o = leaseRoh()?.ordner; return Array.isArr
 /** A-531 COMPLIANCE H2: Hosts der Upload-URLs, die x-ausfuehrung.mjs (PostToolUse) aus der Antwort von prepare_file_upload in die Lease schreibt; sonst leer. */
 export function leaseUploadHosts() { const h = leaseRoh()?.upload_hosts; return Array.isArray(h) ? h.filter((x) => typeof x === "string") : []; }
 /** A-608 BELEG-ORIGINAL: von x-ausfuehrung.mjs gemerkte Originale { datei, sha256 }; sonst leer. */
+/** A-846: gemerkte Upload-URLs der Originale für Anhänge (x-ausfuehrung.mjs uploadHostMerken, purpose dokument_original). */
+export function leaseSpiegel() { const o = leaseRoh()?.spiegel; return Array.isArray(o) ? o.filter((x) => x && typeof x.url === "string" && /^[0-9a-f]{64}$/.test(String(x.sha256))) : []; }
 export function leaseOriginale() { const o = leaseRoh()?.originale; return Array.isArray(o) ? o.filter((x) => x && typeof x.datei === "string" && /^[0-9a-f]{64}$/.test(String(x.sha256))) : []; }
 /** A-657 GO pdf.py: von x-ausfuehrung.mjs gesicherte Rohmails { datei, sha256 } (Gmail get_message RAW ohne PDF-/Bild-Anhang); sonst leer. */
 export function leaseRohmails() { const o = leaseRoh()?.rohmails; return Array.isArray(o) ? o.filter((x) => x && typeof x.datei === "string" && /^[0-9a-f]{64}$/.test(String(x.sha256))) : []; }
@@ -173,6 +190,8 @@ export function leaseWeb() { const w = leaseRoh()?.web; return Array.isArray(w) 
 /** A-782 (Go Bauherr 26.10.2026): Auftragsarten mit Web – Arbeitsauftrag, Ablage-Prüfung, Mail-Vorbereitung, Antwort; alle anderen (Hygiene, Sync, Belegsuche …) ohne.
  *  Wortgleich in x-ausfuehrung.mjs (scripts/test/a782-entschlackung.ts prüft die Gleichheit). */
 export const WEB_ARTEN = new Set(["arbeit", "ablage", "mail_vorbereitung", "antwort"]);
+/** A-846 (E-1143): Entwurfsaufträge, in denen der Hook Originale für Anhänge ablegt – wortgleich in x-ausfuehrung.mjs (scripts/test/a846-dokumente-anhaenge.ts prüft die Gleichheit). */
+export const SPIEGEL_ARTEN = new Set(["arbeit", "mail_vorbereitung", "antwort"]);
 /** A-626 WEB: vergleichbare Web-Adresse – nur https (http wird https wie bei WebFetch), ohne Anmeldedaten, Port und #, Host mit Buchstaben und Punkt, kein internes Netz; sonst null.
  *  Wortgleich in x-ausfuehrung.mjs (scripts/test/a529-vorlage.ts prüft die Gleichheit). */
 export function webAdresse(x) {
