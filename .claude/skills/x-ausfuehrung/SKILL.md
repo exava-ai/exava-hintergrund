@@ -1,6 +1,6 @@
 ---
 name: x-ausfuehrung
-description: Einen Versandauftrag aus EXAVA ausführen – den in EXAVA freigegebenen Entwurf lesen (get_approved_draft) und genau diesen einen Aufruf über den Connector des Kunden machen (Gmail send_message/reply oder ein Werkzeug-Entwurf eines fremden Connectors, z. B. Metricool, Microsoft 365, HubSpot, Notion, Slack, Shopify). Der Hook x-ausfuehrung lässt nur den freigegebenen, unveränderten Aufruf genau einmal durch. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit art versand bzw. skill x-ausfuehrung.
+description: Einen Versandauftrag aus EXAVA ausführen – den in EXAVA freigegebenen Entwurf lesen (get_approved_draft) und genau diesen einen Aufruf über den Connector des Kunden machen (Gmail send_message/reply/forward oder ein Werkzeug-Entwurf eines fremden Connectors, z. B. Metricool, Microsoft 365, HubSpot, Notion, Slack, Shopify). Der Hook x-ausfuehrung lässt nur den freigegebenen, unveränderten Aufruf genau einmal durch. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit art versand bzw. skill x-ausfuehrung.
 effort: max
 ---
 
@@ -17,13 +17,14 @@ Jeder EXAVA-Aufruf trägt `job_id`, `lauf_id`, `lease_generation` und `lease_tok
 - `capability_missing` (z. B. Anhänge): nichts ausführen, `complete_job` mit `outcome: failed`, `fehler_text` = der gemeldete Grund.
 
 ## 2. Connector prüfen
-Lade mit ToolSearch das Werkzeug aus dem Entwurf: bei Mail `send_message` oder `reply` von Gmail (`werkzeug`), bei einem Werkzeug-Entwurf genau `werkzeug_original`.
+Lade mit ToolSearch das Werkzeug aus dem Entwurf: bei Mail `send_message`, `reply` oder `forward` von Gmail (`werkzeug`), bei einem Werkzeug-Entwurf genau `werkzeug_original`.
 - Ist der Connector in dieser Routine nicht verbunden: **kein Ersatzweg** (E-1117: keine andere API, kein anderer Connector), `complete_job` mit `outcome: failed`, `fehler_text: "connector_fehlt: <Server>"`. EXAVA zeigt das dem Kunden.
 
 ## 3. Genau diesen Aufruf ausführen – einmal
 - **Antwort im Verlauf (`thread_id` gesetzt):** unmittelbar davor `mcp__Gmail__get_thread` mit `threadId` = `thread_id` lesen (nur lesen, nichts übernehmen). EXAVA lässt die Antwort nur durch, wenn seit dem Entwurf keine neue Nachricht im Thread liegt; sperrt der Hook mit „neue Nachricht“ oder „Thread vor dem Senden neu lesen“, gilt die Sperrregel unten.
 - **Mail, `werkzeug: send_message`:** `to` = `an`, `cc`, `bcc`, `subject` = `betreff`, `body` = `text`; bei einer Antwort im Verlauf zusätzlich `replyThreadId` = `thread_id` und, wenn gesetzt, `replyToMessageId` = `antwort_auf_message_id`. Nichts ergänzen: keine Signatur, kein htmlBody, kein Anhang, kein anderes Feld.
 - **Mail, `werkzeug: reply`:** `to` = `an`, `cc`, `bcc`, `body` = `text`, `messageId` = `antwort_auf_message_id`.
+- **Mail, `werkzeug: forward`:** `to` = `an`, `cc`, `bcc`, `messageId` = `weiterleiten_message_id`, `forwardText` = `text` (leerer Text: `forwardText` weglassen). Die Anhänge der Ursprungsmail hängt Gmail selbst an – nichts ergänzen.
 - **Werkzeug-Entwurf (`art: werkzeug`):** genau `werkzeug_original` mit genau `eingabe` – kein Feld ändern, ergänzen oder weglassen. Metricool: nur so, wie die Eingabe es sagt (z. B. als Entwurf oder zur Prüfung); nie selbst „veröffentlichen“ wählen. Jeder andere fremde Connector (z. B. Microsoft 365, HubSpot, Notion, Slack, Shopify): genauso nur der freigegebene Aufruf.
 - Sperrt der Hook (`Gesperrt (EXAVA-Ausführung): …`): **nicht wiederholen, nichts umformulieren**, `complete_job` mit `outcome: failed` und dem Grund aus der Sperrmeldung.
 - Nach dem Aufruf meldet der Hook „ausgeführt“ selbst an EXAVA. Du rufst das Werkzeug nie ein zweites Mal auf – auch nicht bei einem Fehler (EXAVA markiert „unklar“, ein Mensch klärt).
