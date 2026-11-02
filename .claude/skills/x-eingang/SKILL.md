@@ -1,6 +1,6 @@
 ---
 name: x-eingang
-description: Eingangsauftrag (Profil ingest, art eingang) – Dateien, die nur in EXAVA liegen (Netzlaufwerk-Eingang, WhatsApp-Medien, Uploads; höchstens 20 je Auftrag), über exava_datei_lesen laden, den SHA-256 selbst rechnen, den Text selbst lesen (Scans über den Helfer x-scan) und mit ingest_document an EXAVA übergeben. Kein Versand, kein Entwurf, keine Rückfrage. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit skill x-eingang.
+description: Eingangsauftrag (Profil ingest, art eingang) – Dateien, die nur in EXAVA liegen (Netzlaufwerk-Eingang, WhatsApp-Medien, Uploads; höchstens 20 je Auftrag), über exava_datei_lesen laden und den SHA-256 selbst rechnen; lesen und mit ingest_document an EXAVA übergeben lässt du jede Datei den Helfer x-scan (A-901). Kein Versand, kein Entwurf, keine Rückfrage. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit skill x-eingang.
 effort: max
 ---
 
@@ -22,10 +22,10 @@ Jeder EXAVA-Aufruf trägt `job_id`, `lauf_id`, `lease_generation`, `lease_token`
 ## 3. Prüfsumme (G13)
 `/usr/bin/sha256sum arbeit/<dokument_id>.<endung>` – selbst gerechnet, nie geraten. Weicht er von `sha256` ab: nicht ingestieren, nur die `dokument_id` nennen. Fehlt `sha256`, gilt der eigene Hash.
 
-## 4. Text lesen und übergeben
-1. Text selbst lesen (`Read` auf `arbeit/<dokument_id>.<endung>`). Liefert das keinen brauchbaren Text (Scan, Foto eines Belegs), liest ihn der Helfer `x-scan` (Agent mit `subagent_type: "x-scan"`, Auftrag nur der Pfad `arbeit/<dokument_id>.<endung>`) – günstiges Modell über das Abo. Kein lesbarer Text → überspringen (nur ID und Grund), nie einen Teil mit leerem Text.
-2. `mcp__EXAVA_Hintergrund__ingest_document(…, source_ref: {dokument_id}, content_sha256: <eigener Hash>, provider_version: <eigener Hash>, source_timestamp, extraction_id, part_number, final_part, pages: [{page_number, text}])` – `pages` nie leer, höchstens 50 Seiten je Teil, große Dateien in nummerierten Teilen ab 1, der letzte mit `final_part: true`. Die Antwort trägt `lieferung_id`.
-3. Optional `mcp__EXAVA_Hintergrund__ingest_facts(…, source_refs: [{dokument_id}], facts)` nur für belegte Aussagen (wörtliches `quelle_zitat`).
+## 4. Text lesen und übergeben (A-901)
+1. Jede Datei liest und übergibt der Helfer `x-scan` (Agent mit `subagent_type: "x-scan"`, CLAUDE.md „Dokumente lesen“), nie du selbst – Auftrag: der Pfad `arbeit/<dokument_id>.<endung>` und `ingest` mit `source_ref: {dokument_id}`, `content_sha256` und `provider_version` = eigener Hash, `source_timestamp`, `extraction_id`, `idempotency_key: eingang:<job_id>:<dokument_id>` (x-scan hängt `:<teil>` an), `pipeline_version: "x-eingang-1"`; die Lease setzt der Hook. Mehrere Dateien parallel in Paketen bis 10 (vor jedem Paket `heartbeat_job`). x-scan liefert Text, Kopfdaten und die Antwort von `ingest_document` (`lieferung_id`). „nicht lesbar“ → überspringen (nur ID und Grund), nie einen Teil mit leerem Text.
+2. Fehlt die Antwort von `ingest_document` (gesperrt, ältere Vorlage), übergibst du den Text von x-scan selbst: `mcp__EXAVA_Hintergrund__ingest_document(…, source_ref: {dokument_id}, content_sha256: <eigener Hash>, provider_version: <eigener Hash>, source_timestamp, extraction_id, part_number, final_part, pages: [{page_number, text}])` – `pages` nie leer, höchstens 50 Seiten je Teil, große Dateien in nummerierten Teilen ab 1, der letzte mit `final_part: true`. Die Antwort trägt `lieferung_id`.
+3. Optional `mcp__EXAVA_Hintergrund__ingest_facts(…, source_refs: [{dokument_id}], facts)` nur für belegte Aussagen (wörtliches `quelle_zitat` aus dem Text von x-scan).
 
 4. **Projektstand (A-706):** Gescannte Post (Netzlaufwerk-Eingang), WhatsApp-Medien und Uploads sind genauso Quelle wie Mails: betrifft ein Dokument ein Projekt (Rechnung, Angebot, Baugenehmigung, Vertrag, Notarurkunde …), pflegst du nach dem Übergeben dessen Stand genau wie im Skill `x-synchronisation` Schritt 4b (Liste, Zuordnen, Delta, Meilensteine, Setzen) – ohne Rückfrage: mehrdeutig → nichts setzen.
 

@@ -8,7 +8,7 @@ effort: max
 
 Du arbeitest in der Claude-Desktop-App am Computer des Nutzers, nicht in der Cloud-Routine. Abholen nur mit `mcp__EXAVA_Hintergrund__arbeit_holen` mit `ort: "computer"` (nach einem Abschluss mit der `lauf_id` der letzten Antwort und wieder `ort: "computer"`); `done: true` = nichts mehr da, Aufgabe beenden. Der Nutzersatz in `job.eingabe` ist der Auftrag (A-554).
 
-Jeder EXAVA-Aufruf trägt `job_id` und `lauf_id`, schreibende zusätzlich `lease_generation`, `lease_token` und einen eigenen `idempotency_key` (z. B. `computer:<job_id>:<schritt>`). Spätestens alle 60 Sekunden `mcp__EXAVA_Hintergrund__heartbeat_job`, auch während du am Bildschirm arbeitest. Erlaubt sind nur die EXAVA-Werkzeuge aus `werkzeuge` der Antwort (Wissen lesen, Lebenszeichen, Rückfrage, Datei übergeben, Abschluss); Entwürfe, Versand und Buchungen lehnt EXAVA im Computer-Auftrag ab.
+Jeder EXAVA-Aufruf trägt `job_id` und `lauf_id`, schreibende zusätzlich `lease_generation`, `lease_token` und einen eigenen `idempotency_key` (z. B. `computer:<job_id>:<schritt>`). Spätestens alle 60 Sekunden `mcp__EXAVA_Hintergrund__heartbeat_job`, auch während du am Bildschirm arbeitest. Erlaubt sind nur die EXAVA-Werkzeuge aus `werkzeuge` der Antwort (Wissen lesen, Lebenszeichen, Rückfrage, Datei übergeben, übergebene Anhänge laden, Abschluss); Entwürfe, Versand und Buchungen lehnt EXAVA im Computer-Auftrag ab.
 
 ## 1. Sicherheit (gilt vor allem anderen)
 Am Computer greifen die Sperren der Cloud-Routine nicht. Deshalb gilt ohne Ausnahme:
@@ -37,6 +37,13 @@ Nennt der Auftrag einen Portal-Download (z. B. Rechnung zu einem Bankumsatz bei 
 2. Keine Anmeldedaten eingeben oder speichern (1.3; fehlt die Anmeldung: `ask_user`), nichts kaufen, ändern, kündigen, bestätigen oder absenden, keine Einstellungen im Portal ändern.
 3. Übergabe nach Abschnitt 3 mit `source_ref: "portal:<anbieter>:<umsatz_id>"` (Anbieter klein, z. B. `portal:openai:<umsatz_id>`); EXAVA nimmt so nur ein PDF an.
 4. Im `bericht` Portal, Rechnungsnummer, Datum und Betrag laut PDF; findet sich keine passende Rechnung, das als **Offen** mit dem Gesuchten.
+
+## 3b. Mail-Anhänge ins Drive-Archiv (A-892)
+Nennt `job.bezug.dokument_ids` Mail-Anhänge (aus der Ablage übergeben, zu groß für den Drive-Connector; in `job.eingabe` je ID „<dokument_id> → <Name>“):
+1. Je ID `exava_datei_lesen` mit `dokument_id`, dann `curl -sSfL -o "<Name>" "<download_url>"` (gültig bis `expires_at`; abgelaufen oder 4xx → genau einmal neu anfordern). SHA-256 selbst rechnen (wie 3.1) und mit `sha256` vergleichen – weicht er ab, nicht hochladen, als Fehler melden.
+2. Hochladen nur in den Drive-Ordner `00-EXAVA/Archiv` des Nutzers, Name unverändert: mit Google Drive für Desktop die Datei in diesen Ordner kopieren und die Synchronisierung abwarten, sonst Google Drive im Browser (vorhandene Anmeldung) → `00-EXAVA/Archiv` → „Neu“ → „Datei hochladen“. Das ist hier ausdrücklich erlaubt (eigene Ablage, keine Wirkung nach außen); nichts teilen, keinen Link erzeugen, nichts anderes ändern oder löschen.
+3. Liegt dort schon eine Datei mit demselben `__#hash8` im Namen, nicht erneut hochladen – zählt als abgelegt. Nachweis über den Google-Drive-Connector (`get_file_metadata`: `sha256Checksum` = `sha256`), sonst Name und Größe in der Drive-Ansicht.
+4. `complete_job` zusätzlich mit `completeness_evidence: {geplant: <Anzahl>, verarbeitet: ["dokument:<id>", …], fehler: [{objekt_id: "dokument:<id>", grund}]}`; im `bericht` je ID Name und Drive-ID bzw. Grund. EXAVA hakt nur gemeldete Anhänge ab, die übrigen bleiben offen.
 
 ## 4. Rückfrage
 Nur wenn ohne eine Angabe oder Handlung des Nutzers nichts mehr geht (Anmeldung, Auswahl, Bestätigung am Rechner): `mcp__EXAVA_Hintergrund__ask_user(question, attempted, options ≤ 5, dedupe_key: "computer:<job_id>:<thema>")`. Der Auftrag endet mit `ask_user`; weiter mit `arbeit_holen(lauf_id, ort: "computer")` (kein `complete_job` danach). Höchstens eine Rückfrage je Lauf.

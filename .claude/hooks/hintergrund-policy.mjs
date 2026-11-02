@@ -10,6 +10,7 @@
 //   aus .exava/lease.json (schreibt nur x-ausfuehrung.mjs) und nur in engster Form (hygieneAusnahme); Löschen, Papierkorb, Teilen und Senden bleiben gesperrt;
 //   A-532: Helfer (Agent, früher Task) nur mit subagent_type x-scan; im Helfer (agent_type x-scan) nur Read, ToolSearch und Lesewerkzeuge von Drive und Gmail, sonst kein Subagent;
 //   und im Netz „Trusted“ wäre sie ein Weg nach draußen und an .claude/ vorbei;
+//   A-901 (Bauherr 02.11.2026): dazu im Helfer genau ingest_document von „EXAVA Hintergrund“ (scanIngest) – die Lease setzt dieser Hook per updatedInput aus .exava/lease.json, der Helfer bekommt sie nie;
 //   EXAVA nur vom Connector „EXAVA Hintergrund“ und nur die Werkzeuge in EXAVA_WERKZEUGE (der Server prüft Profil, Auftrag und Lease zusätzlich);
 //   Gmail, Google Drive, Google Calendar nur Werkzeuge der Klasse „lesen“ mit Profil recherche und nur geprüfte Eingabefelder;
 //   A-531 F1 (Grundregel 7, A-498/E-1109: „Lesen frei“): jeder andere Connector lesend nach lesend() aus sperre.mjs (wortgleich); schreibend nur gesteuert (MCP-1, unten), UUID-Namen und ungültige Zeichen sonst capability_missing; EXAVA-Namen bleiben gesperrt;
@@ -83,6 +84,10 @@ export function eingabeLesend(werkzeug, ti) {
 /** A-532: einziger Helfer (Scans mit günstigem Modell, .claude/agents/x-scan.md) und was er darf. */
 export const SCAN_AGENT = "x-scan";
 const SCAN_EINGEBAUT = new Set(["Read", "ToolSearch"]), SCAN_SERVER = new Set(["gmail", "google_drive"]);
+/** A-901: das eine EXAVA-Werkzeug des Helfers und seine Felder (Vertrag ingest_document, lib/x/connector/symbiose-schemata.ts); die vier Lease-Felder überschreibt scanIngest immer. */
+export const SCAN_EXAVA = "ingest_document";
+export const SCAN_INGEST_FELDER = ["job_id", "lauf_id", "lease_generation", "lease_token", "idempotency_key", "pipeline_version", "source_ref", "provider_version", "expected_source_version", "source_timestamp",
+  "content_sha256", "extraction_id", "part_number", "pages", "total_pages", "final_part", "metadata"];
 /** A-531 DATEI: die drei erlaubten Shell-Formen (datei-upload.md §3.2), ganzer Befehl verankert; Prüfsumme des Renderers setzt der Generator. */
 export const PDF_RENDERER_SHA256 = "de8c478a47dddaf9999b2f5e8b2c55c1f7c30684b3f4b08f0f4d6d734aba2fef", XLSX_RENDERER_SHA256 = "0643294b441c03a9948810b953ad65cf21ecde7184e0e24111a480c5aab95582"; // A-622 P3-A: Listen als .xlsx
 const NAME = String.raw`[A-Za-z0-9._-]{1,140}(?:__#[0-9a-f]{8})?`, DATEI = String.raw`arbeit/${NAME}\.(?:pdf|json|csv|docx|xlsx)`;
@@ -300,7 +305,19 @@ const fremdLesend = (name, werkzeug, ti) => EXAVA_BEKANNT.has(werkzeug) || EXAVA
  *  (Auftrag, WebSearch-Treffer, Links einer geöffneten Seite), ohne #-Teil (webAdresse vergleicht ohne ihn), nie selbst gebaut; jedes andere EXAVA-Werkzeug unverändert frei. */
 const startAdresse = (name, werkzeug, ti) => werkzeug !== "browser_starten" || (WEB_ARTEN.has(leaseArt()) && !String(ti?.url ?? "").includes("#") && leaseWeb().includes(webAdresse(ti?.url))) ? frei()
   : nein(name, "Startadresse nur unverändert aus dem Auftrag, aus WebSearch-Treffern oder Links einer schon geöffneten Seite (A-626), ohne #-Teil – nie selbst gebaut.");
-/** Entscheidung für eine Hook-Eingabe (JSON-Text). `vertrag` ist austauschbar (Test). Liefert { code, stderr? }. */
+/** A-901 Lease-Weitergabe: ingest_document aus dem Helfer x-scan nur mit vollständiger Lease des laufenden Auftrags (.exava/lease.json, schreibt nur x-ausfuehrung.mjs nach arbeit_holen)
+ *  und nur mit den Feldern des Werkzeugs; job_id, lauf_id, lease_generation und lease_token setzt der Hook per updatedInput (Werte des Helfers werden ersetzt). Profil, Auftrag,
+ *  Lease und Quelle prüft der Server (hintergrundBindung, brain_lease_pruefen). Ohne gültige Lease gesperrt (fail closed). */
+const UUID_LEASE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function scanIngest(name, ti) {
+  const l = leaseRoh();
+  if (!NUR(ti, SCAN_INGEST_FELDER)) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} mit den Feldern des Werkzeugs.`);
+  if (!l || !UUID_LEASE.test(String(l.job_id)) || !UUID_LEASE.test(String(l.lauf_id)) || !Number.isInteger(l.lease_generation) || l.lease_generation < 1 || !/^[A-Za-z0-9_-]{20,200}$/.test(l.lease_token))
+    return nein(name, `im Helfer ${SCAN_AGENT} nur mit der Lease des laufenden Auftrags (arbeit_holen).`);
+  return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "A-901 Lease aus .exava/lease.json",
+    updatedInput: { ...ti, job_id: l.job_id, lauf_id: l.lauf_id, lease_generation: l.lease_generation, lease_token: l.lease_token } } }) };
+}
+/** Entscheidung für eine Hook-Eingabe (JSON-Text). `vertrag` ist austauschbar (Test). Liefert { code, stderr?, stdout? } (stdout nur für die Lease-Weitergabe an x-scan, A-901). */
 export function entscheide(roh, { vertrag } = {}) {
   let eingabe;
   try { eingabe = JSON.parse(roh); } catch { return { code: 2, stderr: "Gesperrt (EXAVA-Hintergrund): Hook-Eingabe nicht lesbar." }; }
@@ -313,7 +330,8 @@ export function entscheide(roh, { vertrag } = {}) {
   if (!teile && !scan && (name === "Write" || name === "Edit")) return schreibPruefen(name, eingabe.tool_input);
   if (!teile && !scan && (name === "WebSearch" || name === "WebFetch")) return webPruefen(name, eingabe.tool_input); // A-626 WEB
   if (!teile) return (scan ? SCAN_EINGEBAUT : EINGEBAUT).has(name) ? frei() : nein(name, "nur Read, Glob, Grep, Skill, ToolSearch, TodoWrite (Shell nur in festen Formen, Web nur in Arbeits-, Prüf- und Antwortaufträgen, Schreiben nur unter arbeit/, Helfer nur x-scan).");
-  if (scan && (teile.server === EXAVA_SERVER || teile.server.startsWith("exava") || gesteuert(teile))) return nein(name, `im Helfer ${SCAN_AGENT} keine EXAVA- und keine Schreibwerkzeuge.`);
+  if (scan && teile.server === EXAVA_SERVER && teile.werkzeug === SCAN_EXAVA) return scanIngest(name, eingabe.tool_input); // A-901: genau dieses EXAVA-Werkzeug, Lease vom Hook
+  if (scan && (teile.server === EXAVA_SERVER || teile.server.startsWith("exava") || gesteuert(teile))) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} von „EXAVA Hintergrund“, keine anderen EXAVA- und keine Schreibwerkzeuge.`);
   if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
   if (gesteuert(teile) && !EXAVA_WERKZEUGE.has(teile.werkzeug) && !EXAVA_BEKANNT.has(teile.werkzeug)) return frei(); // A-531 AUSFUEHRUNG: Entscheidung bei x-ausfuehrung.mjs (Lease + Freigabe)
   if (teile.server === "exava") return nein(name, "die normale Verbindung „EXAVA“ ist in der Hintergrundarbeit gesperrt; EXAVA-Werkzeuge nur vom Connector „EXAVA Hintergrund“.");
@@ -323,7 +341,7 @@ export function entscheide(roh, { vertrag } = {}) {
     const treffer = [...VERTRAG_SERVER].filter((s) => hat(v.server[s], teile.werkzeug));
     // Hauptsession 16.10.2026 (#1195): „EXAVA Hintergrund“ kann ebenfalls mit UUID erscheinen → nur die EXAVA_WERKZEUGE und nur ohne Namensgleichheit mit einem Vertragswerkzeug;
     // EXAVA erzwingt Profil, Lease und Rechte serverseitig (dieser Hook ist dort die zweite Schicht). Jedes andere EXAVA-Werkzeug per UUID bleibt gesperrt.
-    if (treffer.length === 0 && scan) return nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`);
+    if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA ? scanIngest(name, eingabe.tool_input) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-901: wie EXAVA_WERKZEUGE per UUID
     if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return startAdresse(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length === 0) return fremdLesend(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length !== 1) return nein(name, "capability_missing: Connector mit UUID-Namen, Werkzeug mehrdeutig, gesperrt bis geprüft.");
@@ -345,7 +363,7 @@ export function entscheide(roh, { vertrag } = {}) {
 }
 
 function hauptprogramm() {
-  const ende = (r) => { if (r.stderr) process.stderr.write(r.stderr); process.exit(r.code); };
+  const ende = (r) => { if (r.stderr) process.stderr.write(r.stderr); if (r.stdout && r.code === 0) return process.stdout.write(r.stdout, () => process.exit(0)); process.exit(r.code); }; // A-901: updatedInput (Lease für x-scan)
   const absturz = (f) => ende({ code: 2, stderr: `Gesperrt (EXAVA-Hintergrund): Hook-Fehler (${String(f?.message ?? f).slice(0, 200)}).` });
   process.on("uncaughtException", absturz);
   process.on("unhandledRejection", absturz);

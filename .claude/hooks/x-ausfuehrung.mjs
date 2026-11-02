@@ -2,7 +2,8 @@
 // A-531 AUSFUEHRUNG PR 3: Hook der Hintergrundroutine für genau die freigabepflichtigen Aufrufe – Gmail send_message/reply und Schreibwerkzeuge jedes fremden Connectors (gesteuert(), MCP-1: z. B. Metricool, HubSpot, Notion, Slack, Shopify).
 // Muster: docs/x2/spike/mandant-repo/_claude/hooks/x-freigabe.mjs + versand-melden.mjs (Altweg, unverändert). Unterschied: kein Connector-Token – der Hook weist sich mit der Lease des
 // Auftrags aus (POST /api/x/freigabe-pruefen und /api/x/versand-melden ohne Authorization-Kopf, lib/x/connector/hook.ts, PR 1).
-//   post (PostToolUse, jedes MCP-Werkzeug): arbeit_holen von „EXAVA Hintergrund“ → Lease des gelieferten Auftrags nach .exava/lease.json (Claude schreibt sie nie selbst; ohne Auftrag geleert).
+//   post (PostToolUse, jedes MCP-Werkzeug): arbeit_holen von „EXAVA Hintergrund“ → Lease des gelieferten Auftrags nach .exava/lease.json (Claude schreibt sie nie selbst; ohne Auftrag geleert;
+//            A-901: mit lease_generation – hintergrund-policy.mjs setzt die Lease in ingest_document des Helfers x-scan ein).
 //            Drive get_file_permissions im Auftrag ablage: Ordner mit einem verbundenen Postfach als Eigentümer → lease.ordner (A-534, G7: Verschieben nur in eigene Ordner).
 //            Gmail get_thread im Versandauftrag: Thread-Stand (IDs, sha256) → /api/x/quellen-beobachtung mit Lease (B10-HINTERGRUND: Antwort nur, wenn der Thread unverändert ist).
 //            prepare_file_upload von „EXAVA Hintergrund“: Host der upload_url → lease.upload_hosts (A-531 COMPLIANCE H2: die Policy lässt curl PUT nur dorthin).
@@ -424,7 +425,7 @@ export async function nachher(eingabe, { env = process.env, f = fetch } = {}) {
     const o = antwortObjekte(eingabe.tool_response).find((x) => typeof x.lease_token === "string" && x.job && typeof x.lauf_id === "string");
     mkdirSync(join(projekt(env), ".exava"), { recursive: true });
     mkdirSync(join(projekt(env), "arbeit"), { recursive: true }); // A-632 FOLGE: curl -o legt keinen Ordner an – arbeit/ steht vor dem ersten Laden
-    writeFileSync(leasePfad(env), JSON.stringify(o ? { job_id: o.job.id, lauf_id: o.lauf_id, lease_token: o.lease_token, ...(typeof o.silo === "string" ? { silo: o.silo } : {}), ...(typeof o.job.art === "string" ? { art: o.job.art } : {}), ...(o.job.art === "belegsuche" && o.job.bezug?.csv === true ? { csv: true } : {}), ...(o.job.art === "ablage" && datevAus(o.job.bezug?.datev_paket) ? { datev: datevAus(o.job.bezug.datev_paket) } : {}) /* A-818 */, adressen: adressen(o.job),
+    writeFileSync(leasePfad(env), JSON.stringify(o ? { job_id: o.job.id, lauf_id: o.lauf_id, lease_token: o.lease_token, ...(Number.isInteger(o.lease_generation) ? { lease_generation: o.lease_generation } : {}) /* A-901: Lease-Weitergabe an x-scan */, ...(typeof o.silo === "string" ? { silo: o.silo } : {}), ...(typeof o.job.art === "string" ? { art: o.job.art } : {}), ...(o.job.art === "belegsuche" && o.job.bezug?.csv === true ? { csv: true } : {}), ...(o.job.art === "ablage" && datevAus(o.job.bezug?.datev_paket) ? { datev: datevAus(o.job.bezug.datev_paket) } : {}) /* A-818 */, adressen: adressen(o.job),
       ...(WEB_ARTEN.has(o.job.art) ? { web: [...new Set(textAdressen(o.job.eingabe))] } : {}) } : {})); // A-534: art und Postfächer für die Ausnahmen der Policy; A-626 WEB: Adressen aus dem Auftrag
     return { code: 0 };
   }
