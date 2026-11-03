@@ -32,9 +32,11 @@
 //   auch mehrfach kodiert oder in Vollbreite; Freitext wie Namen erkennt keine Regel) – kein WebSearch-Umweg mehr; WebFetch und curl -o bleiben bei lease.web.
 //   A-531 AUSFUEHRUNG (PR 3): gesteuert() – Gmail send_message/reply und jeder fremde Connector schreibend (MCP-1; nicht Gmail/Drive/Kalender, nicht exava*, kein UUID-Name) – entscheidet NICHT dieser Hook, sondern x-ausfuehrung.mjs (Lease + Freigabe in
 //   EXAVA, fail closed); hier frei, damit genau dieser zweite Hook zuständig ist (settings.json führt beide mit Prüfsumme; fehlt er, sperrt die Integritätsprüfung).
+//   A-907 Fehler-Radar: jeder Exit 2 hängt eine kleine Zeile an arbeit/hook-blocks.jsonl (blockZeile/blockMerken: Zeit, Werkzeug, Sperrgrund, bei Bash der geschwärzte Kurzbefehl) –
+//   nur im Hook-Lauf von Claude Code (CLAUDE_PROJECT_DIR gesetzt), Fehler beim Schreiben werden ignoriert, der Block bleibt Exit 2; die Routine meldet die Zeilen mit hook_blocks.
 // Rein lokal, ohne Netz, ohne Umgebungsvariable. Fail closed: unlesbare Eingabe, Vertrag nicht lesbar, Absturz und Frist → Exit 2.
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -216,19 +218,25 @@ export function webAdresse(x) {
 /** A-626 WEB: Suchtext ohne Mailadresse, IBAN und lange Nummer (Kunden-, Steuer-, Kontonummer) – keine Mandantendaten an den Suchdienst. */
 export const SUCHE_VERTRAULICH = /[^\s@]+@[^\s@]+\.[^\s@]+|\b[a-z]{2}\d{2}(?: ?[a-z0-9]{4}){3,}|\d{8,}/i;
 /** A-905 (E-1166, Bauherr 02.11.2026): Startadresse, die Claude für den Browser-Auftrag selbst bestimmt (nicht mehr nur aus lease.web) – https mit Domain wie webAdresse (ohne
- *  Anmeldedaten, Port, IP und internen Host), ohne #-Teil, und in Host, Pfad und Query ohne Mailadresse, IBAN und lange Nummer (8 Ziffern): jede %XX-Folge einzeln dekodiert
- *  (ungültige bleiben stehen), bis zu dreimal (doppelt kodiert), dann NFKC (Vollbreit-Zeichen); Ziffern als \p{Nd}, jedes Zeichen außer Buchstabe und Ziffer gilt als Trenner
- *  (1234-5678-90, 1,2,…, %2B, Geburtsdatum). Restrisiko: Freitext wie Name oder Anschrift im Pfad und Subdomain-Labels erkennt keine Regel – dagegen stehen Site-Bindung T9,
- *  Netzschicht der Browser-Maschine und die Freigabe beim Absenden (E-1160). */
-const START_PRUEFUNG = [/[^\s@]+@[^\s@]+\.[^\s@]+/u, /(?<![\p{L}\p{Nd}])[a-z]{2}\p{Nd}{2}(?:[^\p{L}\p{Nd}]*[a-z0-9]{4}){3,}/iu, /\p{Nd}(?:[^\p{L}\p{Nd}]*\p{Nd}){7}/u];
-const prozentEinmal = (t) => t.replace(/(?:%[0-9a-f]{2})+/gi, (lauf) => { try { return decodeURIComponent(lauf); } catch { return lauf.replace(/%([0-7][0-9a-f])/gi, (_, h) => String.fromCharCode(parseInt(h, 16))); } });
+ *  Anmeldedaten, Port, IP und internen Host), ohne #-Teil, und in Host, Pfad und Query ohne Mailadresse, IBAN (Prüfziffer und Länge je Land, ASCII-Grenzen, „_“ und „/“ trennen nicht –
+ *  wie START_URL in lib/x/connector/symbiose-schemata.ts) und lange Nummer (8 Ziffern \p{N}, jedes Zeichen außer Buchstabe/Ziffer als Trenner – 1234-5678-90, 1,2,…, %2B, Geburtsdatum).
+ *  Geprüft wird jede Stufe (dekodierStufen): roh, dann bis zu drei Runden „jede %XX-Folge per TextDecoder (ungültige Bytes → U+FFFD), NFKC, auch ohne Formatzeichen“; bleibt danach
+ *  eine %XX-Folge, gilt die Adresse als verschleiert (gesperrt). Restrisiko: Freitext (Name, Anschrift) in Pfad, Query oder Subdomain der selbst bestimmten Startadresse erreicht deren
+ *  Host ungeprüft – Site-Bindung T9, Netzschicht der Browser-Maschine und die Freigabe beim Absenden (E-1160) greifen erst danach. */
+const IBAN_LAENGE = { AD: 24, AT: 20, BE: 16, BG: 22, CH: 21, CY: 28, CZ: 24, DE: 22, DK: 18, EE: 20, ES: 24, FI: 18, FR: 27, GB: 22, GI: 23, GR: 27, HR: 21, HU: 28, IE: 22, IS: 26, IT: 27,
+  LI: 21, LT: 20, LU: 20, LV: 21, MC: 27, MT: 31, NL: 18, NO: 15, PL: 28, PT: 25, RO: 24, SE: 24, SI: 19, SK: 24, SM: 27, VA: 22 };
+const IBAN_KANDIDAT = /(?<![A-Za-z0-9])[a-z]{2}\d{2}(?:[^\p{L}\p{N}_/]{0,3}[a-z0-9]{4}){2,7}(?:[^\p{L}\p{N}_/]{0,3}[a-z0-9]{1,3})?(?![A-Za-z0-9])/giu;
+const ibanGueltig = (t) => { const k = t.replace(/[^A-Za-z0-9]/g, "").toUpperCase(); if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(k) || (IBAN_LAENGE[k.slice(0, 2)] ?? k.length) !== k.length) return false;
+  let m = 0; for (const c of k.slice(4) + k.slice(0, 4)) for (const d of /\d/.test(c) ? c : String(c.charCodeAt(0) - 55)) m = (m * 10 + Number(d)) % 97; return m === 1; };
+const START_MAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/u, START_ZIFFERN = /\p{N}(?:[^\p{L}\p{N}]*\p{N}){7}/u;
+const prozentEinmal = (t) => t.replace(/(?:%[0-9a-f]{2})+/gi, (lauf) => new TextDecoder("utf-8").decode(Uint8Array.from(lauf.match(/[0-9a-f]{2}/gi) ?? [], (h) => parseInt(h, 16))));
+/** Dekodierstufen (wortgleich als stufen in symbiose-schemata.ts): roh, NFKC, je Runde dekodiert, NFKC und ohne Formatzeichen (\p{Cf}); null = nach drei Runden noch %XX. */
+const dekodierStufen = (t) => { let x = t.normalize("NFKC"); const s = new Set([t, x, x.replace(/\p{Cf}/gu, "")]);
+  for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(x); i++) { const d = prozentEinmal(x); x = d.normalize("NFKC"); s.add(d).add(x).add(x.replace(/\p{Cf}/gu, "")); }
+  return /%[0-9a-f]{2}/i.test(x) ? null : [...s]; };
 export function startFrei(url) {
-  const roh = String(url ?? ""), w = /^https:\/\/[^\s"<>\\#]+$/.test(roh) ? webAdresse(roh) : null;
-  if (!w) return false;
-  let t = w.slice(8).replace(/\+/g, " ");
-  for (let i = 0; i < 3; i++) { const n = prozentEinmal(t); if (n === t) break; t = n; }
-  t = t.normalize("NFKC");
-  return !START_PRUEFUNG.some((r) => r.test(t));
+  const roh = String(url ?? ""), w = /^https:\/\/[^\s"<>\\#]+$/.test(roh) ? webAdresse(roh) : null, stufen = w ? dekodierStufen(w.slice(8).replace(/\+/g, " ")) : null;
+  return !!stufen && !stufen.some((t) => START_MAIL.test(t) || START_ZIFFERN.test(t) || [...t.matchAll(IBAN_KANDIDAT)].some((m) => ibanGueltig(m[0])));
 }
 /** A-626 WEB (Go Bauherr 21.10.2026): nur in den Aufträgen aus WEB_ARTEN (A-782), nur lesen. WebSearch mit unverfänglichem Suchtext (mode = Suchstufe des Werkzeugs, z. B. standard/extended, erster Live-Lauf 21.10.); WebFetch nur mit einer Adresse aus lease.web – nie selbst gebaut. */
 export function webPruefen(name, ti) {
@@ -399,14 +407,45 @@ export function entscheide(roh, { vertrag } = {}) {
   return frei();
 }
 
+/** A-907 Fehler-Radar: arbeit/hook-blocks.jsonl bleibt klein – darüber wird nichts mehr angehängt (die Routine meldet die Zeilen ohnehin mit heartbeat_job, complete_job oder arbeit_holen). */
+export const BLOCK_DATEI_MAX = 64 * 1024;
+/** G8: kurz und geschwärzt – angeschnittenes letztes Wort weg, dann IBAN, Mailadresse, Schlüssel/Token (samt Schema-Wort davor, z. B. „Authorization: <Schema> <Token>“), Dateien
+ *  unter arbeit/, lange Zeichen- und Ziffernfolgen (EXAVA schwärzt erneut). */
+const kurzGeschwaerzt = (s, max) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return (t.length > max ? t.slice(0, max).replace(/\S*$/, "") : t)
+  .replace(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b/g, "[IBAN]").replace(/\S+@\S+/g, "[E-Mail]")
+  .replace(/\b(token|api[-_]?key|secret|passwor[dt]|session|cookie|authorization)\b\s*[:=]\s*(?:[A-Za-z]+\s+)?\S+/gi, "$1=[…]").replace(/\barbeit\/\S+/g, "arbeit/[Datei]")
+  .replace(/[\w+\/=-]{24,}/g, "[…]").replace(/\d{6,}/g, "[Zahl]").trim(); };
+/** A-907: Zeile für arbeit/hook-blocks.jsonl zu einem Exit 2 – Zeit, Werkzeug (≤ 64) und Sperrgrund ohne Eingabewerte (≤ 300); nur bei Bash steht davor der Kurzbefehl
+ *  (≤ 120, ohne Query/Fragment, geschwärzt). null = kein Block. */
+export function blockZeile(roh, r, jetzt = new Date()) {
+  if (!r || r.code !== 2) return null;
+  let e = null; try { e = JSON.parse(roh); } catch { /* unlesbar: Werkzeug unbekannt */ }
+  const name = typeof e?.tool_name === "string" ? e.tool_name : "", vor = `${name.slice(0, 120)} – `;
+  let grund = String(r.stderr ?? "").replace(/^Gesperrt \(EXAVA-Hintergrund\): /, "");
+  if (name && grund.startsWith(vor)) grund = grund.slice(vor.length);
+  const befehl = name === "Bash" && typeof e?.tool_input?.command === "string" ? kurzGeschwaerzt(e.tool_input.command.replace(/[?#]\S*/g, ""), 120) : "";
+  return JSON.stringify({ zeit: jetzt.toISOString(), werkzeug: name.replace(/[^\w.:-]/g, "").slice(0, 64) || "?", grund: kurzGeschwaerzt(befehl ? `${befehl} – ${grund}` : grund, 300) });
+}
+/** A-907: nur anhängen, nur im Hook-Lauf von Claude Code (CLAUDE_PROJECT_DIR gesetzt – Tests ohne Projekt schreiben nichts), nie über einen Symlink, nie über BLOCK_DATEI_MAX;
+ *  jeder Fehler wird ignoriert – der Block selbst bleibt Exit 2. */
+export function blockMerken(zeile) {
+  try {
+    if (!zeile || !process.env.CLAUDE_PROJECT_DIR) return;
+    const dir = join(projektDir(), "arbeit"), datei = join(dir, "hook-blocks.jsonl");
+    mkdirSync(dir, { recursive: true });
+    if (lstatSync(dir).isSymbolicLink() || (existsSync(datei) && (lstatSync(datei).isSymbolicLink() || lstatSync(datei).size > BLOCK_DATEI_MAX))) return;
+    appendFileSync(datei, zeile + "\n");
+  } catch { /* nie den Block ändern */ }
+}
+
 function hauptprogramm() {
-  const ende = (r) => { if (r.stderr) process.stderr.write(r.stderr); if (r.stdout && r.code === 0) return process.stdout.write(r.stdout, () => process.exit(0)); process.exit(r.code); }; // A-901: updatedInput (Lease für x-scan)
+  let roh = "";
+  const ende = (r) => { if (r.code === 2) blockMerken(blockZeile(roh, r)); if (r.stderr) process.stderr.write(r.stderr); if (r.stdout && r.code === 0) return process.stdout.write(r.stdout, () => process.exit(0)); process.exit(r.code); }; // A-901: updatedInput (Lease für x-scan); A-907: Exit 2 → arbeit/hook-blocks.jsonl
   const absturz = (f) => ende({ code: 2, stderr: `Gesperrt (EXAVA-Hintergrund): Hook-Fehler (${String(f?.message ?? f).slice(0, 200)}).` });
   process.on("uncaughtException", absturz);
   process.on("unhandledRejection", absturz);
   const frist = Math.min(FRIST_MS, Number(process.env.X_HOOK_FRIST_MS) || FRIST_MS); // nur verkürzbar (Test)
   setTimeout(() => ende({ code: 2, stderr: "Gesperrt (EXAVA-Hintergrund): Prüfung dauerte zu lange." }), frist);
-  let roh = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (c) => { roh += c; if (roh.length > 4 << 20) absturz(new Error("Hook-Eingabe zu groß")); });
   process.stdin.on("error", absturz);
