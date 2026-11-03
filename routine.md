@@ -2,6 +2,8 @@ STOPP: Führe zum Start NIEMALS `Bash` (`ls`, `cat routine.md`) aus und rufe am 
 
 # Ablauf der Hintergrundroutine
 
+**Sprache (A-916):** Alle Status- und Abschlussmeldungen dieser Routine – auch die letzte Antwort im Chat – schreibst du auf Deutsch.
+
 Der gespeicherte Prompt der Routine ist genau ein Satz: „Arbeite nach CLAUDE.md in diesem Repository.“ Dieser Ablauf gilt für jeden Start.
 
 1. **Abholen – der erste EXAVA-Aufruf jedes Laufs:** `mcp__EXAVA_Hintergrund__arbeit_holen()` ohne Argumente. Davor nur, was die STOPP-Zeile oben sagt: `routine.md` mit Read und EIN `ToolSearch` – kein Bash (kein `ls`, kein `cat`; der Hook sperrt es), keine andere Datei, keine Suche. `arbeit_holen`, `heartbeat_job` und `browser_starten` markiert EXAVA zusätzlich zum Vorabladen; fehlt dir später ein Werkzeug von „EXAVA Hintergrund“ (aufgeschoben oder noch nicht verbunden), lädst du alle fehlenden mit EINEM `ToolSearch`-Aufruf – nie Werkzeug für Werkzeug.
