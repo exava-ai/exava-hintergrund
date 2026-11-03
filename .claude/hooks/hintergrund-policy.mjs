@@ -299,7 +299,7 @@ export function hygieneAusnahme(server, werkzeug, ti) {
       && (ti.name === "Eingang" || ti.parentId !== undefined || ti.parents !== undefined); // O1: Archiv/03_FINAL_ARCHIV nie ohne Elternordner
   return ok ? frei() : nein(n, "nur in engster Form: Spam aufheben, INBOX entfernen, Datei umbenennen/verschieben (Namensschema JJJJ-MM-TT_Gesellschaft_Absender_Dokumenttyp[_Betrag]__#hash8, Ziel nur ein per get_file_permissions bestätigter eigener Ordner), Ordner „Eingang“, „Archiv“ oder „03_FINAL_ARCHIV“ anlegen (Elternordner nur ein bestätigter eigener), Mail-Anhang als „@arbeit/<datei>.<pdf|docx|xlsx|…>“ nach 00-EXAVA/Archiv hochladen oder über ~7 MB als Kopie derselben eigenen Drive-Datei (gleicher __#hash8) dorthin kopieren, DATEV-Paket als „@arbeit/<name>.zip“ in seinen bestätigten Monatsordner (Ordner nur aus job.bezug.datev_paket) – kein anderer Inhalt, keine Rechte.");
 }
-export const EINGEBAUT = new Set(["Read", "Glob", "Grep", "Skill", "ToolSearch", "TodoWrite"]);
+export const EINGEBAUT = new Set(["Read", "Glob", "Grep", "Skill", "ToolSearch", "TodoWrite", "SubagentHandback"]); // A-919: Rückgabe eines Helfers – trägt im Hook nicht immer agent_type, gibt nur Text an den Aufrufer
 /** Entwurf #1182: claude.ai-Connectoren können statt eines Namens eine UUID tragen (`mcp__4553787f-…__send_message`, nach mcpTeile mit „_“). */
 export const UUID_SERVER = /^[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}$/;
 
