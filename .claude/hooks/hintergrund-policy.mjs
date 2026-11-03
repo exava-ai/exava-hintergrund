@@ -28,6 +28,8 @@
 //   A-626 WEB (Go Bauherr 21.10.2026), A-782 (Go 26.10.2026): WebSearch und WebFetch nur in den Aufträgen aus WEB_ARTEN (webPruefen) – Suchtext ohne Mailadresse, IBAN und lange Nummer; WebFetch und curl -o aus dem Web
 //   (BASH_WEB) nur mit einer Adresse aus lease.web (Auftragstext, WebSearch-Treffer, Links einer geöffneten Seite; schreibt nur x-ausfuehrung.mjs), nie mit einer selbst gebauten –
 //   so gelangen keine Mandantendaten an fremde Domains.
+//   A-905 (E-1166, Bauherr 02.11.2026): die Startadresse von browser_starten darf Claude selbst bestimmen (startFrei: https mit Domain, ohne Mailadresse, IBAN und lange Nummer,
+//   auch mehrfach kodiert oder in Vollbreite; Freitext wie Namen erkennt keine Regel) – kein WebSearch-Umweg mehr; WebFetch und curl -o bleiben bei lease.web.
 //   A-531 AUSFUEHRUNG (PR 3): gesteuert() – Gmail send_message/reply und jeder fremde Connector schreibend (MCP-1; nicht Gmail/Drive/Kalender, nicht exava*, kein UUID-Name) – entscheidet NICHT dieser Hook, sondern x-ausfuehrung.mjs (Lease + Freigabe in
 //   EXAVA, fail closed); hier frei, damit genau dieser zweite Hook zuständig ist (settings.json führt beide mit Prüfsumme; fehlt er, sperrt die Integritätsprüfung).
 // Rein lokal, ohne Netz, ohne Umgebungsvariable. Fail closed: unlesbare Eingabe, Vertrag nicht lesbar, Absturz und Frist → Exit 2.
@@ -213,6 +215,21 @@ export function webAdresse(x) {
 }
 /** A-626 WEB: Suchtext ohne Mailadresse, IBAN und lange Nummer (Kunden-, Steuer-, Kontonummer) – keine Mandantendaten an den Suchdienst. */
 export const SUCHE_VERTRAULICH = /[^\s@]+@[^\s@]+\.[^\s@]+|\b[a-z]{2}\d{2}(?: ?[a-z0-9]{4}){3,}|\d{8,}/i;
+/** A-905 (E-1166, Bauherr 02.11.2026): Startadresse, die Claude für den Browser-Auftrag selbst bestimmt (nicht mehr nur aus lease.web) – https mit Domain wie webAdresse (ohne
+ *  Anmeldedaten, Port, IP und internen Host), ohne #-Teil, und in Host, Pfad und Query ohne Mailadresse, IBAN und lange Nummer (8 Ziffern): jede %XX-Folge einzeln dekodiert
+ *  (ungültige bleiben stehen), bis zu dreimal (doppelt kodiert), dann NFKC (Vollbreit-Zeichen); Ziffern als \p{Nd}, jedes Zeichen außer Buchstabe und Ziffer gilt als Trenner
+ *  (1234-5678-90, 1,2,…, %2B, Geburtsdatum). Restrisiko: Freitext wie Name oder Anschrift im Pfad und Subdomain-Labels erkennt keine Regel – dagegen stehen Site-Bindung T9,
+ *  Netzschicht der Browser-Maschine und die Freigabe beim Absenden (E-1160). */
+const START_PRUEFUNG = [/[^\s@]+@[^\s@]+\.[^\s@]+/u, /(?<![\p{L}\p{Nd}])[a-z]{2}\p{Nd}{2}(?:[^\p{L}\p{Nd}]*[a-z0-9]{4}){3,}/iu, /\p{Nd}(?:[^\p{L}\p{Nd}]*\p{Nd}){7}/u];
+const prozentEinmal = (t) => t.replace(/(?:%[0-9a-f]{2})+/gi, (lauf) => { try { return decodeURIComponent(lauf); } catch { return lauf.replace(/%([0-7][0-9a-f])/gi, (_, h) => String.fromCharCode(parseInt(h, 16))); } });
+export function startFrei(url) {
+  const roh = String(url ?? ""), w = /^https:\/\/[^\s"<>\\#]+$/.test(roh) ? webAdresse(roh) : null;
+  if (!w) return false;
+  let t = w.slice(8).replace(/\+/g, " ");
+  for (let i = 0; i < 3; i++) { const n = prozentEinmal(t); if (n === t) break; t = n; }
+  t = t.normalize("NFKC");
+  return !START_PRUEFUNG.some((r) => r.test(t));
+}
 /** A-626 WEB (Go Bauherr 21.10.2026): nur in den Aufträgen aus WEB_ARTEN (A-782), nur lesen. WebSearch mit unverfänglichem Suchtext (mode = Suchstufe des Werkzeugs, z. B. standard/extended, erster Live-Lauf 21.10.); WebFetch nur mit einer Adresse aus lease.web – nie selbst gebaut. */
 export function webPruefen(name, ti) {
   if (!WEB_ARTEN.has(leaseArt())) return nein(name, "Web nur in Arbeits-, Prüf- und Antwortaufträgen (Lease aus arbeit_holen).");
@@ -306,10 +323,11 @@ const fremdLesend = (name, werkzeug, ti) => EXAVA_BEKANNT.has(werkzeug) || EXAVA
   : !lesend(werkzeug) ? nein(name, "capability_missing: fremder Connector nur lesend; schreiben, senden, anlegen und löschen sind gesperrt.")
   : eingabeLesend(werkzeug, ti) ? frei() : nein(name, "capability_missing: fetch/query mit schreibender Eingabe (Methode ≠ GET/HEAD, Body, SQL außer einer select/with-Anweisung) – nur als Werkzeug-Entwurf (save_draft, Entwurfsart werkzeug) mit Freigabe im Dashboard.");
 
-/** A-882 S3 (A-626, G8): browser_starten öffnet die Adresse auf EXAVAs Browser-Maschine und legt die Site fest, auf der getippt wird – nur unverändert aus lease.web
- *  (Auftrag, WebSearch-Treffer, Links einer geöffneten Seite), ohne #-Teil (webAdresse vergleicht ohne ihn), nie selbst gebaut; jedes andere EXAVA-Werkzeug unverändert frei. */
-const startAdresse = (name, werkzeug, ti) => werkzeug !== "browser_starten" || (WEB_ARTEN.has(leaseArt()) && !String(ti?.url ?? "").includes("#") && leaseWeb().includes(webAdresse(ti?.url))) ? frei()
-  : nein(name, "Startadresse nur unverändert aus dem Auftrag, aus WebSearch-Treffern oder Links einer schon geöffneten Seite (A-626), ohne #-Teil – nie selbst gebaut.");
+/** A-882 S3 (A-626, G8), A-905 (E-1166): browser_starten öffnet die Adresse auf EXAVAs Browser-Maschine und legt die Site fest, auf der getippt wird – nur in Aufträgen mit Web,
+ *  ohne #-Teil (webAdresse vergleicht ohne ihn); unverändert aus lease.web (Auftrag, WebSearch-Treffer, Links einer geöffneten Seite) oder von Claude bestimmt nach startFrei;
+ *  jedes andere EXAVA-Werkzeug unverändert frei. */
+const startAdresse = (name, werkzeug, ti) => werkzeug !== "browser_starten" || (WEB_ARTEN.has(leaseArt()) && !String(ti?.url ?? "").includes("#") && (leaseWeb().includes(webAdresse(ti?.url)) || startFrei(ti?.url))) ? frei()
+  : nein(name, "Startadresse nur https mit Domain (keine IP, kein interner Host, kein Port, keine Anmeldedaten), ohne #-Teil und ohne Mailadresse, IBAN oder lange Nummer (A-905) – sonst die Startseite ohne solche Teile wählen, Unterseiten per browser_handeln.");
 /** A-901 Lease-Weitergabe: ingest_document aus dem Helfer x-scan nur mit vollständiger Lease des laufenden Auftrags (.exava/lease.json, schreibt nur x-ausfuehrung.mjs nach arbeit_holen)
  *  und nur mit den Feldern des Werkzeugs; job_id, lauf_id, lease_generation und lease_token setzt der Hook per updatedInput (Werte des Helfers werden ersetzt). Profil, Auftrag,
  *  Lease und Quelle prüft der Server (hintergrundBindung, brain_lease_pruefen). Ohne gültige Lease gesperrt (fail closed). */
