@@ -92,7 +92,7 @@ export const SCAN_AGENT = "x-scan";
 /** A-914: zweiter Helfer x-triage (Vorsortierung, .claude/agents/x-triage.md) – gleiche Startregeln, im Helfer nur Read, ToolSearch, Drive/Gmail lesend, kein EXAVA-Werkzeug. */
 export const TRIAGE_AGENT = "x-triage";
 const HELFER = new Set([SCAN_AGENT, TRIAGE_AGENT]);
-const SCAN_EINGEBAUT = new Set(["Read", "ToolSearch"]), SCAN_SERVER = new Set(["gmail", "google_drive"]);
+const SCAN_EINGEBAUT = new Set(["Read", "ToolSearch", "SubagentHandback"]), SCAN_SERVER = new Set(["gmail", "google_drive"]); // A-919: SubagentHandback = Rückgabeweg des Helfers an die Routine (Claude Code), ohne ihn kommt kein Ergebnis an
 /** A-901: das eine EXAVA-Werkzeug des Helfers und seine Felder (Vertrag ingest_document, lib/x/connector/symbiose-schemata.ts); die vier Lease-Felder überschreibt scanIngest immer. */
 export const SCAN_EXAVA = "ingest_document";
 export const SCAN_INGEST_FELDER = ["job_id", "lauf_id", "lease_generation", "lease_token", "idempotency_key", "pipeline_version", "source_ref", "provider_version", "expected_source_version", "source_timestamp",
