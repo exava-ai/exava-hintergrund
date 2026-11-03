@@ -1,7 +1,7 @@
 ---
 name: x-ablage
 description: Ablageauftrag (Kernregel 9 und 12, art ablage) – Dateien aus 00-EXAVA/Eingang und Mail-Anhänge mit __#hash8 benennen und ins Archiv legen, Vollständigkeit prüfen, Mail und alle Anhänge gemeinsam prüfen (ein Vorgang je Mail). Nichts löschen, nichts teilen, nie Papierkorb. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit skill x-ablage bzw. art ablage.
-effort: max
+effort: medium
 ---
 
 # Ablage (Hintergrundarbeit, Kernregel 9 und 12)

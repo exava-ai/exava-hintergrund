@@ -8,7 +8,7 @@
 //   weil die Shell im Netz „Trusted“ sonst ein Weg nach draußen und an .claude/ vorbei wäre;
 //   A-534 (Kernregeln 9–11): Ablage (Drive umbenennen/verschieben, Ordner anlegen) und Postfach-Hygiene (Spam aufheben, INBOX entfernen) nur mit einer Lease der passenden Auftragsart
 //   aus .exava/lease.json (schreibt nur x-ausfuehrung.mjs) und nur in engster Form (hygieneAusnahme); Löschen, Papierkorb, Teilen und Senden bleiben gesperrt;
-//   A-532: Helfer (Agent, früher Task) nur mit subagent_type x-scan; im Helfer (agent_type x-scan) nur Read, ToolSearch und Lesewerkzeuge von Drive und Gmail, sonst kein Subagent;
+//   A-532/A-914: Helfer (Agent, früher Task) nur mit subagent_type x-scan oder x-triage; im Helfer nur Read, ToolSearch und Lesewerkzeuge von Drive und Gmail (ingest_document nur x-scan), sonst kein Subagent;
 //   und im Netz „Trusted“ wäre sie ein Weg nach draußen und an .claude/ vorbei;
 //   A-901 (Bauherr 02.11.2026): dazu im Helfer genau ingest_document von „EXAVA Hintergrund“ (scanIngest) – die Lease setzt dieser Hook per updatedInput aus .exava/lease.json, der Helfer bekommt sie nie;
 //   A-901 Teil 2: den Helfer nur im Vordergrund (run_in_background: false) und nur mit subagent_type, prompt, description starten (SCAN_AGENT_FELDER); sein erster Aufruf bindet
@@ -89,6 +89,9 @@ export function eingabeLesend(werkzeug, ti) {
 }
 /** A-532: einziger Helfer (Scans mit günstigem Modell, .claude/agents/x-scan.md) und was er darf. */
 export const SCAN_AGENT = "x-scan";
+/** A-914: zweiter Helfer x-triage (Vorsortierung, .claude/agents/x-triage.md) – gleiche Startregeln, im Helfer nur Read, ToolSearch, Drive/Gmail lesend, kein EXAVA-Werkzeug. */
+export const TRIAGE_AGENT = "x-triage";
+const HELFER = new Set([SCAN_AGENT, TRIAGE_AGENT]);
 const SCAN_EINGEBAUT = new Set(["Read", "ToolSearch"]), SCAN_SERVER = new Set(["gmail", "google_drive"]);
 /** A-901: das eine EXAVA-Werkzeug des Helfers und seine Felder (Vertrag ingest_document, lib/x/connector/symbiose-schemata.ts); die vier Lease-Felder überschreibt scanIngest immer. */
 export const SCAN_EXAVA = "ingest_document";
@@ -366,16 +369,16 @@ export function entscheide(roh, { vertrag } = {}) {
   if (!eingabe || typeof eingabe !== "object" || typeof eingabe.tool_name !== "string" || !eingabe.tool_name) return { code: 2, stderr: "Gesperrt (EXAVA-Hintergrund): Hook-Eingabe ohne tool_name." };
   const name = eingabe.tool_name, teile = mcpTeile(name);
   const scan = eingabe.agent_type != null; // A-532: Aufruf aus einem Helfer (agent_type laut Hook-Eingabe); nur x-scan, sonst gesperrt
-  if (scan && eingabe.agent_type !== SCAN_AGENT) return nein(name, `Helfer ${String(eingabe.agent_type).slice(0, 60)} nicht freigegeben (nur ${SCAN_AGENT}).`);
+  if (scan && !HELFER.has(eingabe.agent_type)) return nein(name, `Helfer ${String(eingabe.agent_type).slice(0, 60)} nicht freigegeben (nur ${SCAN_AGENT}, ${TRIAGE_AGENT}).`);
   if (scan) helferBinden(eingabe.agent_id); // A-901 Teil 2: der erste Aufruf bindet den Helfer an den laufenden Auftrag
   const ag = eingabe.tool_input; // A-901 Teil 2: nur im Vordergrund und nur mit SCAN_AGENT_FELDER
-  if (name === "Agent" || name === "Task") return !scan && NUR(ag, SCAN_AGENT_FELDER) && ag.subagent_type === SCAN_AGENT && ag.run_in_background === false && typeof ag.prompt === "string" && ag.prompt.trim() !== ""
-    ? frei() : nein(name, `nur der Helfer ${SCAN_AGENT} mit subagent_type, prompt, description und run_in_background: false (nie im Hintergrund, kein model/effort), aus dem Helfer kein weiterer.`);
+  if (name === "Agent" || name === "Task") return !scan && NUR(ag, SCAN_AGENT_FELDER) && HELFER.has(ag.subagent_type) && ag.run_in_background === false && typeof ag.prompt === "string" && ag.prompt.trim() !== ""
+    ? frei() : nein(name, `nur die Helfer ${SCAN_AGENT} und ${TRIAGE_AGENT} mit subagent_type, prompt, description und run_in_background: false (nie im Hintergrund, kein model/effort), aus dem Helfer kein weiterer.`);
   if (!teile && !scan && name === "Bash") return bashPruefen(eingabe.tool_input);
   if (!teile && !scan && (name === "Write" || name === "Edit")) return schreibPruefen(name, eingabe.tool_input);
   if (!teile && !scan && (name === "WebSearch" || name === "WebFetch")) return webPruefen(name, eingabe.tool_input); // A-626 WEB
   if (!teile) return (scan ? SCAN_EINGEBAUT : EINGEBAUT).has(name) ? frei() : nein(name, "nur Read, Glob, Grep, Skill, ToolSearch, TodoWrite (Shell nur in festen Formen, Web nur in Arbeits-, Prüf- und Antwortaufträgen, Schreiben nur unter arbeit/, Helfer nur x-scan).");
-  if (scan && teile.server === EXAVA_SERVER && teile.werkzeug === SCAN_EXAVA) return scanIngest(name, eingabe.tool_input, eingabe.agent_id); // A-901: genau dieses EXAVA-Werkzeug, Lease vom Hook
+  if (scan && eingabe.agent_type === SCAN_AGENT && teile.server === EXAVA_SERVER && teile.werkzeug === SCAN_EXAVA) return scanIngest(name, eingabe.tool_input, eingabe.agent_id); // A-901: genau dieses EXAVA-Werkzeug, Lease vom Hook
   if (scan && (teile.server === EXAVA_SERVER || teile.server.startsWith("exava") || gesteuert(teile))) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} von „EXAVA Hintergrund“, keine anderen EXAVA- und keine Schreibwerkzeuge.`);
   if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
   if (gesteuert(teile) && !EXAVA_WERKZEUGE.has(teile.werkzeug) && !EXAVA_BEKANNT.has(teile.werkzeug)) return frei(); // A-531 AUSFUEHRUNG: Entscheidung bei x-ausfuehrung.mjs (Lease + Freigabe)
@@ -386,7 +389,7 @@ export function entscheide(roh, { vertrag } = {}) {
     const treffer = [...VERTRAG_SERVER].filter((s) => hat(v.server[s], teile.werkzeug));
     // Hauptsession 16.10.2026 (#1195): „EXAVA Hintergrund“ kann ebenfalls mit UUID erscheinen → nur die EXAVA_WERKZEUGE und nur ohne Namensgleichheit mit einem Vertragswerkzeug;
     // EXAVA erzwingt Profil, Lease und Rechte serverseitig (dieser Hook ist dort die zweite Schicht). Jedes andere EXAVA-Werkzeug per UUID bleibt gesperrt.
-    if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA ? scanIngest(name, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-901: wie EXAVA_WERKZEUGE per UUID
+    if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA && eingabe.agent_type === SCAN_AGENT ? scanIngest(name, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-901: wie EXAVA_WERKZEUGE per UUID
     if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return startAdresse(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length === 0) return fremdLesend(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length !== 1) return nein(name, "capability_missing: Connector mit UUID-Namen, Werkzeug mehrdeutig, gesperrt bis geprüft.");
