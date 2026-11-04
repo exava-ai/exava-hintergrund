@@ -415,7 +415,8 @@ function ordnerBestaetigen(eingabe, env) {
   const rechte = alleObjekte(eingabe.tool_response).filter((x) => typeof x.role === "string"); // Rechte samt permissionDetails (geerbte Freigaben eines Ordners stehen als eigene Rechte darin)
   const ungeteilt = Array.isArray(l.ungeteilt) ? l.ungeteilt.filter((x) => typeof x === "string") : [];
   const nurEigen = rechte.length > 0 && rechte.every((x) => x.role === "owner" && (x.type === undefined || x.type === "user") && (typeof x.emailAddress !== "string" || l.adressen.includes(x.emailAddress.toLowerCase())));
-  const neu = { ...(l.art !== "ablage" || ordner.includes(id) || ordner.length >= 20 ? {} : { ordner: [...ordner, id] }), ...(nurEigen && !ungeteilt.includes(id) ? { ungeteilt: [...ungeteilt, id].slice(-300) } : {}) }; // A-924 Erweiterung: Ordner nur in der Ablage; A-930: die letzten 300 Dateien (Ausführungslauf ≤ 500)
+  const datei = Array.isArray(l.umbenennen) && l.umbenennen.some((u) => u?.file_id === id); // A-930 Nachtrag: eine Datei zum Umbenennen ist kein Ordner – sonst füllen 20 Umbenennungen lease.ordner und 00-EXAVA ist nicht mehr bestätigbar
+  const neu = { ...(l.art !== "ablage" || datei || ordner.includes(id) || ordner.length >= 20 ? {} : { ordner: [...ordner, id] }), ...(nurEigen && !ungeteilt.includes(id) ? { ungeteilt: [...ungeteilt, id].slice(-300) } : {}) }; // A-924 Erweiterung: Ordner nur in der Ablage; A-930: die letzten 300 Dateien (Ausführungslauf ≤ 500)
   if (Object.keys(neu).length) leaseSchreiben(env, JSON.stringify({ ...l, ...neu }));
 }
 

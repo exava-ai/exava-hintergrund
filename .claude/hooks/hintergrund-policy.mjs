@@ -304,10 +304,11 @@ export function hygieneAusnahme(server, werkzeug, ti) {
     : ti.base64Content !== undefined ? NUR(ti, ["title", "parentId", "contentMimeType", "base64Content", "disableConversionToGoogleType"]) && schemaName(ti.title, anhangEndung(ti.base64Content)) // A-615: Mail-Anhang nur als Platzhalter (Inhalt setzt x-ausfuehrung.mjs), nur nach 00-EXAVA/Archiv; A-924: Name nach Schema
       && !!anhangEndung(ti.base64Content) && ti.contentMimeType === ANHANG_MIME[anhangEndung(ti.base64Content)] && ti.disableConversionToGoogleType === true // A-642 OFFICE: Endung, Titel und MIME passen zusammen
       && [leaseRoh()?.archiv, leaseRoh()?.whatsapp].some((z) => typeof z === "string" && ti.parentId === z) // A-924 Erweiterung: 00-EXAVA/Archiv bzw. 00-EXAVA/WhatsApp (die Bindung der WhatsApp-IDs prüft x-ausfuehrung.mjs)
-    : NUR(ti, ["name", "mimeType", "parents", "parentId"]) && ti.mimeType === "application/vnd.google-apps.folder" && (ABLAGE_ORDNER.includes(ti.name) || !!leaseDatev()?.ordner.includes(ti.name)) // A-818: die drei Ordner des DATEV-Pakets
+    : NUR(ti, ["name", "title", "mimeType", "parents", "parentId"]) && (ti.name === undefined) !== (ti.title === undefined) && ti.mimeType === "application/vnd.google-apps.folder" // A-930 Nachtrag: Ordnername als title (Feld des Connectors wie beim Hochladen) oder name, genau eins
+      && (ABLAGE_ORDNER.includes(ti.title ?? ti.name) || !!leaseDatev()?.ordner.includes(ti.title ?? ti.name)) // A-818: die drei Ordner des DATEV-Pakets
       && (ti.parentId === undefined || ID(ti.parentId)) && (ti.parents === undefined || (Array.isArray(ti.parents) && ti.parents.length === 1 && ID(ti.parents[0])))
       && [ti.parentId, ti.parents?.[0]].every((x) => x === undefined || leaseOrdner().includes(x)) // HOOK-AUDIT F3 (G7): Elternordner nur ein bestätigter eigener Ordner
-      && (ti.name === "Eingang" || ti.parentId !== undefined || ti.parents !== undefined); // O1: Archiv nie ohne Elternordner
+      && ((ti.title ?? ti.name) === "Eingang" || ti.parentId !== undefined || ti.parents !== undefined); // O1: Archiv nie ohne Elternordner
   return ok ? frei() : nein(n, "nur in engster Form: Spam aufheben, INBOX entfernen, Datei am Ort umbenennen (nur fileId und title, genau der Name aus EXAVA – job.bezug.umbenennen bzw. namen aus heartbeat_job –, alle lesbaren Dokumente, nur eine eigene, nicht geteilte Datei nach get_file_permissions – nie verschieben, nie kopieren), Ordner „Eingang“, „Archiv“ oder „WhatsApp“ anlegen (Elternordner nur ein bestätigter eigener), Anhang als „@arbeit/<datei>.<pdf|docx|xlsx|…>“ mit Namen nach Schema JJJJ-MM-TT__Gesellschaft__TYP__…__#hash8 nach 00-EXAVA/Archiv bzw. ein WhatsApp-Dokument nach 00-EXAVA/WhatsApp hochladen, DATEV-Paket als „@arbeit/<name>.zip“ in seinen bestätigten Monatsordner (Ordner nur aus job.bezug.datev_paket) – kein anderer Inhalt, keine Rechte.");
 }
 export const EINGEBAUT = new Set(["Read", "Glob", "Grep", "Skill", "ToolSearch", "TodoWrite", "SubagentHandback"]); // A-919: Rückgabe eines Helfers – trägt im Hook nicht immer agent_type, gibt nur Text an den Aufrufer
@@ -376,9 +377,9 @@ export function scanIngest(name, ti, agentId) {
 /** A-930: EXAVA-Aufruf aus dem Helfer x-drive-batch – nur DRIVE_EXAVA mit dessen Feldern, nur unter der Lease des Auftrags, an den der Helfer gebunden ist; die Lease setzt der Hook. */
 export function driveBatchExava(name, werkzeug, ti, agentId) {
   const l = leaseRoh(), felder = Object.hasOwn(DRIVE_EXAVA, werkzeug) ? DRIVE_EXAVA[werkzeug] : null;
-  if (!felder || !NUR(ti ?? {}, [...felder, "job_id", "lauf_id", "lease_generation", "lease_token"])) return nein(name, `im Helfer ${DRIVE_AGENT} nur ${Object.keys(DRIVE_EXAVA).join(", ")} mit deren Feldern.`);
+  if (!felder || !NUR(ti ?? {}, [...felder, "job_id", "lauf_id", "lease_generation", "lease_token"])) return nein(name, `im Helfer ${DRIVE_AGENT} nur ${Object.keys(DRIVE_EXAVA).join(", ")} mit deren Feldern – arbeit_holen und complete_job ruft nur die Routine, die Lease setzt der Hook; dein erster Aufruf ist ausfuehrung_liste mit seite: 1.`); // A-930 Nachtrag
   if (!l || !UUID_LEASE.test(String(l.job_id)) || !UUID_LEASE.test(String(l.lauf_id)) || !Number.isInteger(l.lease_generation) || l.lease_generation < 1 || !/^[A-Za-z0-9_-]{20,200}$/.test(l.lease_token))
-    return nein(name, `im Helfer ${DRIVE_AGENT} nur mit der Lease des laufenden Auftrags (arbeit_holen).`);
+    return nein(name, `im Helfer ${DRIVE_AGENT} nur mit der Lease des laufenden Auftrags (setzt der Hook, nie arbeit_holen).`);
   if (helferAuftrag(agentId) !== l.job_id) return nein(name, `im Helfer ${DRIVE_AGENT} nur für den Auftrag, unter dem er gestartet wurde.`);
   return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "A-930 Lease aus .exava/lease.json",
     updatedInput: { ...(ti ?? {}), job_id: l.job_id, lauf_id: l.lauf_id, lease_generation: l.lease_generation, lease_token: l.lease_token } } }) };
