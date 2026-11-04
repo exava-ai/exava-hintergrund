@@ -116,8 +116,9 @@ async function senden(pfad, koerper, f = fetch) {
 }
 
 /** PreToolUse-Entscheidung. Liefert { code, stderr? }. `f` austauschbar (Test). */
-export const CURL_URL = /^\/usr\/bin\/curl -q -sSf -X PUT --data-binary @\S+ -H "content-type: [^"]+" "(https:\/\/[^"\s]+)"$/;
-export const CURL_LADEN = /^\/usr\/bin\/curl -q -sSfL -o arbeit\/[A-Za-z0-9._#-]{1,160} "https:\/\/[^"\s$`\\]+"$/; // A-623 FOLGE: Form wie BASH_LADEN der Policy, ohne Dollar, Backtick und Backslash
+// A-944: --max-time 120 wie MAXZEIT der Policy; ÜBERGANG bis 11.11.2026 auch ohne (dann das „?“ entfernen, AUFGABEN A-944)
+export const CURL_URL = /^\/usr\/bin\/curl -q -sSf(?: --max-time 120)? -X PUT --data-binary @\S+ -H "content-type: [^"]+" "(https:\/\/[^"\s]+)"$/;
+export const CURL_LADEN = /^\/usr\/bin\/curl -q -sSfL(?: --max-time 120)? -o arbeit\/[A-Za-z0-9._#-]{1,160} "https:\/\/[^"\s$`\\]+"$/; // A-623 FOLGE: Form wie BASH_LADEN der Policy, ohne Dollar, Backtick und Backslash
 export async function vorher(eingabe, { env = process.env, f = fetch } = {}) {
   const d = mcpTeile(eingabe?.tool_name);
   if (d && (d.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(d.server)) && d.werkzeug === "create_file" && eingabe.tool_input?.base64Content !== undefined) return anhangEinsetzen(eingabe.tool_input, env);
@@ -332,6 +333,8 @@ async function seiteMerken(eingabe, env, f) {
 }
 /** A-608 BELEG-ORIGINAL: Endung je Typ, erkannt an den ersten Bytes (nie am Namen oder mimeType der Antwort); Grenze wie beleg_original (20 MiB, lib/x/belegbild.ts). */
 export const ORIGINAL_MAX = 20 * 1024 * 1024;
+/** A-944 Nachtrag (Bauherr 04.11.2026): höchstens 40 gemerkte Originale je Auftrag (eine Belegsuche hat 30–35 Umsätze); Rohmails bleiben bei 10. */
+export const ORIGINALE_MAX = 40;
 export function originalEndung(buf) {
   return buf.subarray(0, 5).toString("latin1") === "%PDF-" ? "pdf" : buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff ? "jpg"
     : buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? "png" : ["II*\0", "MM\0*"].includes(buf.subarray(0, 4).toString("latin1")) ? "tif" : null;
@@ -363,7 +366,7 @@ export function gespeicherteAusgabe(eingabe, id) {
   } catch { return []; }
 }
 /** A-608 BELEG-ORIGINAL: im Auftrag belegsuche Drive download_file_content (base64) bzw. Gmail get_message RAW (Anhänge) → Datei unter arbeit/ und SHA-256 in lease.originale
- *  (höchstens 10); A-659: im Auftrag ablage nur die Drive-Datei unter arbeit/ (Prüfsumme per sha256sum, wenn Drive keine sha256Checksum liefert – nie ein Original); sonst nichts (fail closed). */
+ *  (höchstens ORIGINALE_MAX); A-659: im Auftrag ablage nur die Drive-Datei unter arbeit/ (Prüfsumme per sha256sum, wenn Drive keine sha256Checksum liefert – nie ein Original); sonst nichts (fail closed). */
 function originalMerken(eingabe, env, quelle) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
   const id = quelle === "drive" ? eingabe.tool_input?.fileId : eingabe.tool_input?.messageId;
@@ -381,7 +384,7 @@ function originalMerken(eingabe, env, quelle) {
   const vorher = originale.length;
   bufs.forEach((buf, n) => {
     const endung = originalEndung(buf) ?? (nurDatei ? "bin" : null); // A-924 Erweiterung: Office, CSV, Bild ohne Signatur nur für die Prüfsumme (arbeit/drive-<id>.bin), nie ein Original
-    if (!endung || buf.length > ORIGINAL_MAX || originale.length >= 10) return;
+    if (!endung || buf.length > ORIGINAL_MAX || originale.length >= ORIGINALE_MAX) return;
     const datei = quelle === "drive" ? `arbeit/drive-${id}.${endung}` : `arbeit/gmail-${id}-${n + 1}.${endung}`, sha256 = createHash("sha256").update(buf).digest("hex");
     mkdirSync(join(projekt(env), "arbeit"), { recursive: true });
     if ([join(projekt(env), "arbeit"), join(projekt(env), datei)].some((x) => { try { return lstatSync(x).isSymbolicLink(); } catch { return false; } })) return; // nie über einen Verweis schreiben
@@ -412,7 +415,7 @@ function mailPdfMerken(eingabe, env) {
   let gemeldet = null; try { gemeldet = JSON.parse(String(eingabe.tool_response?.stdout ?? "").trim())?.datei; } catch { /* kein JSON */ }
   if (!eml || !pdf || gemeldet !== m[3] || originalEndung(pdf) !== "pdf" || !(Array.isArray(l.rohmails) && l.rohmails.some((x) => x?.datei === m[1] && x.sha256 === sha(eml)))) return;
   const originale = Array.isArray(l.originale) ? l.originale.filter((x) => x && typeof x.sha256 === "string" && typeof x.datei === "string" && x.datei !== m[3]) : [];
-  if (originale.length < 10) leaseSchreiben(env, JSON.stringify({ ...l, originale: [...originale, { datei: m[3], sha256: sha(pdf) }] }));
+  if (originale.length < ORIGINALE_MAX) leaseSchreiben(env, JSON.stringify({ ...l, originale: [...originale, { datei: m[3], sha256: sha(pdf) }] }));
 }
 /** A-534 (G7): Ordner-ID aus get_file_permissions nur dann in lease.ordner, wenn ein verbundenes Postfach Eigentümer ist und die Lease-Art ablage lautet; sonst nichts (fail closed). */
 function ordnerBestaetigen(eingabe, env) {

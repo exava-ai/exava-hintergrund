@@ -114,16 +114,23 @@ export const BASH_PDF_MAIL = /^\/usr\/bin\/python3 -I \.claude\/tools\/pdf\.py -
 export const BASH_PDF = new RegExp(String.raw`^/usr/bin/python3 -I \.claude/tools/pdf\.py arbeit/${NAME}\.json arbeit/${NAME}\.pdf$`);
 export const BASH_XLSX = new RegExp(String.raw`^/usr/bin/python3 -I \.claude/tools/xlsx\.py arbeit/${NAME}\.json arbeit/${NAME}\.xlsx$`);
 const GELADEN = String.raw`arbeit/${NAME}\.(?:pdf|jpe?g|png|webp|heic|tiff?|docx?|xlsx?|csv|txt|odt|ods|rtf)`; // A-600 FOLGE: Eingang (x-eingang) – geladene Datei aus exava_datei_lesen; A-642 OFFICE: Formate der Anhang-Ablage
-export const BASH_SHA = new RegExp(String.raw`^/usr/bin/sha256sum (?:${DATEI}|${GELADEN}|arbeit/drive-[A-Za-z0-9_-]{6,120}\.bin)$`); // A-924 Erweiterung: Prüfsumme einer vom Hook geladenen Drive-Datei (Erstaufnahme)
-export const BASH_LADEN = new RegExp(String.raw`^/usr/bin/curl -q -sSfL -o ${GELADEN} "https://([A-Za-z0-9.-]+)/storage/v1/object/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+(?:&download=[A-Za-z0-9._%()~+-]*)?"$`); // A-632 FOLGE: „+“ = Leerzeichen im Dateinamen
-export const BASH_CURL = new RegExp(String.raw`^/usr/bin/curl -q -sSf -X PUT --data-binary @${DATEI} -H "content-type: ${MIME}" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
+/** A-944 (Bauherr 04.11.2026): sha256sum über 1 bis 20 Dateien je Aufruf, je ein Leerzeichen. Die drei Formen sind disjunkt (DATEI liegt bis auf .json in GELADEN) – sonst verfolgt
+ *  die Wiederholung bei einem Fehlschlag (z. B. 20 Dateien und „| cut“) exponentiell zurück (Sekunden statt < 1 ms). */
+const SHA_DATEI = String.raw`(?:${GELADEN}|arbeit/${NAME}\.json|arbeit/drive-[A-Za-z0-9_-]{6,120}\.bin)`;
+export const BASH_SHA = new RegExp(String.raw`^/usr/bin/sha256sum ${SHA_DATEI}(?: ${SHA_DATEI}){0,19}$`); // A-924 Erweiterung: Prüfsumme einer vom Hook geladenen Drive-Datei (Erstaufnahme)
+export const BASH_WC = new RegExp(String.raw`^/usr/bin/wc -c ${SHA_DATEI}(?: ${SHA_DATEI}){0,19}$`); // A-944 Nachtrag (Bauherr 04.11.2026): Größe (size_bytes) derselben Dateien, lesend – auch Gmail-Anhänge
+/** A-944: curl mit festem Timeout direkt hinter -q -sSf bzw. -q -sSfL (nicht fangend, Gruppen bleiben). ÜBERGANG: die alte Form ohne --max-time bleibt bis 11.11.2026 erlaubt –
+ *  dann das „?“ entfernen (AUFGABEN A-944), ebenso in CURL_URL/CURL_LADEN von x-ausfuehrung.mjs. */
+const MAXZEIT = String.raw`(?: --max-time 120)?`;
+export const BASH_LADEN = new RegExp(String.raw`^/usr/bin/curl -q -sSfL${MAXZEIT} -o ${GELADEN} "https://([A-Za-z0-9.-]+)/storage/v1/object/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+(?:&download=[A-Za-z0-9._%()~+-]*)?"$`); // A-632 FOLGE: „+“ = Leerzeichen im Dateinamen
+export const BASH_CURL = new RegExp(String.raw`^/usr/bin/curl -q -sSf${MAXZEIT} -X PUT --data-binary @${DATEI} -H "content-type: ${MIME}" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
 /** A-608 BELEG-ORIGINAL: Upload des Originals (Datei vom Hook unter arbeit/drive-<fileId>.<endung> bzw. arbeit/gmail-<messageId>-<n>.<endung>, Typ wie beleg_original; A-657: …-mail.pdf aus pdf.py --mail). */
-export const BASH_CURL_ORIGINAL = new RegExp(String.raw`^/usr/bin/curl -q -sSf -X PUT --data-binary @(arbeit/(?:drive-[A-Za-z0-9_-]{6,120}|gmail-[A-Za-z0-9_-]{6,120}-(?:\d{1,2}|mail))\.(?:pdf|jpg|png|tif)) -H "content-type: (?:application/pdf|image/jpeg|image/png|image/tiff)" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
+export const BASH_CURL_ORIGINAL = new RegExp(String.raw`^/usr/bin/curl -q -sSf${MAXZEIT} -X PUT --data-binary @(arbeit/(?:drive-[A-Za-z0-9_-]{6,120}|gmail-[A-Za-z0-9_-]{6,120}-(?:\d{1,2}|mail))\.(?:pdf|jpg|png|tif)) -H "content-type: (?:application/pdf|image/jpeg|image/png|image/tiff)" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
 /** A-657/A-658: ausgefüllte CSV der Belegsuche (eine Gesellschaft je Auftrag) – nur im CSV-Modus (lease.csv). */
 const CSV_BELEG = String.raw`arbeit/belegsuche-[A-Za-z0-9._-]{1,60}\.csv`;
-export const BASH_CURL_CSV = new RegExp(String.raw`^/usr/bin/curl -q -sSf -X PUT --data-binary @(${CSV_BELEG}) -H "content-type: text/csv" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
+export const BASH_CURL_CSV = new RegExp(String.raw`^/usr/bin/curl -q -sSf${MAXZEIT} -X PUT --data-binary @(${CSV_BELEG}) -H "content-type: text/csv" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
 /** A-626 WEB: öffentliche Datei laden – dieselbe Form wie BASH_LADEN, Adresse aus lease.web (webPruefen); URL ohne Leerraum, Anführungszeichen, Dollar, Backtick und Backslash. */
-export const BASH_WEB = new RegExp(String.raw`^/usr/bin/curl -q -sSfL -o ${GELADEN} "(https://[^"\s$\x60\\]{1,2000})"$`);
+export const BASH_WEB = new RegExp(String.raw`^/usr/bin/curl -q -sSfL${MAXZEIT} -o ${GELADEN} "(https://[^"\s$\x60\\]{1,2000})"$`);
 /** A-818 (G5, Go Bauherr 28.10.2026): DATEV-Paket im Ablage-Auftrag – Name und Ordner nur aus lease.datev (x-ausfuehrung.mjs übernimmt job.bezug.datev_paket, nie vom Modell); Laden vom
  *  Speicher-Host der Lease (Bucket belege oder ablage, Pfadzeichen der Netzlaufwerk-Ablage, ohne Dollar, Backtick, Backslash), Prüfsumme, Upload als Platzhalter in den bestätigten Monatsordner.
  *  DATEV_ZIP_MAX, DATEV_STAMM, DATEV_ORDNER und datevAus wortgleich in x-ausfuehrung.mjs (scripts/test/a529-vorlage.ts prüft die Gleichheit). */
@@ -136,7 +143,7 @@ export function datevAus(d) {
 }
 const DATEV_ZIP = String.raw`arbeit/DATEV_[A-Z0-9_-]{1,20}_\d{4}-(?:0[1-9]|1[0-2])(?:_Nachtrag-\d{1,2})?\.zip`;
 export const BASH_SHA_DATEV = new RegExp(String.raw`^/usr/bin/sha256sum (${DATEV_ZIP})$`);
-export const BASH_LADEN_DATEV = new RegExp(String.raw`^/usr/bin/curl -q -sSfL -o (${DATEV_ZIP}) "https://([A-Za-z0-9.-]+)/storage/v1/object/sign/(?:belege|ablage)/[A-Za-z0-9/._%&()',;=+@!-]+\?token=[A-Za-z0-9._-]+(?:&download=[A-Za-z0-9._%()~+-]*)?"$`);
+export const BASH_LADEN_DATEV = new RegExp(String.raw`^/usr/bin/curl -q -sSfL${MAXZEIT} -o (${DATEV_ZIP}) "https://([A-Za-z0-9.-]+)/storage/v1/object/sign/(?:belege|ablage)/[A-Za-z0-9/._%&()',;=+@!-]+\?token=[A-Za-z0-9._-]+(?:&download=[A-Za-z0-9._%()~+-]*)?"$`);
 const projektDir = () => resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 /** Bash: nur command/description/timeout, kein Hintergrund, kein „..“, genau eine der vier Formen; pdf.py nur mit unveränderter Prüfsumme; curl nur an Speicher-Hosts aus EXAVA-Antworten (Lease). */
 export function bashPruefen(ti) {
@@ -147,7 +154,7 @@ export function bashPruefen(ti) {
   const dl = BASH_LADEN_DATEV.exec(c), ds = BASH_SHA_DATEV.exec(c), d = leaseDatev(); // A-818 (G5): nur die Datei aus lease.datev, Laden nur vom Speicher-Host der Lease
   if (dl || ds) return !c.includes("..") && d && (dl ?? ds)[1] === `arbeit/${d.name}.zip` && (!dl || leaseUploadHosts().includes(dl[2].toLowerCase())) ? frei()
     : nein("Bash", "DATEV-Paket nur im Ablage-Auftrag mit job.bezug.datev_paket: curl -o arbeit/<name>.zip von der download_url aus exava_datei_lesen (Speicher-Host der Lease) und sha256sum dieser Datei.");
-  if (c.includes("..") || !(BASH_PDF.test(c) || BASH_XLSX.test(c) || BASH_SHA.test(c) || BASH_CURL.test(c) || BASH_LADEN.test(c) || BASH_WEB.test(c))) return nein("Bash", "nur die Formen pdf.py, xlsx.py, sha256sum, curl PUT (Skill x-arbeitsauftrag) und curl -o (Skills x-eingang, x-arbeitsauftrag).");
+  if (c.includes("..") || !(BASH_PDF.test(c) || BASH_XLSX.test(c) || BASH_SHA.test(c) || BASH_WC.test(c) || BASH_CURL.test(c) || BASH_LADEN.test(c) || BASH_WEB.test(c))) return nein("Bash", "nur die Formen pdf.py, xlsx.py, sha256sum, wc -c, curl PUT (Skill x-arbeitsauftrag) und curl -o (Skills x-eingang, x-arbeitsauftrag).");
   for (const [re, datei, soll] of [[BASH_PDF, "pdf.py", PDF_RENDERER_SHA256], [BASH_XLSX, "xlsx.py", XLSX_RENDERER_SHA256]]) if (re.test(c)) { let h = ""; try { h = createHash("sha256").update(readFileSync(join(projektDir(), ".claude/tools", datei))).digest("hex"); } catch { /* fehlt */ }
     if (h !== soll) return nein("Bash", `${datei} verändert oder nicht lesbar.`); }
   if (BASH_CURL.test(c) && !leaseUploadHosts().includes(BASH_CURL.exec(c)[1].toLowerCase())) return nein("Bash", "curl PUT nur an den Host der Upload-URL aus prepare_file_upload (Lease)."); // COMPLIANCE H2
@@ -158,7 +165,7 @@ export function bashPruefen(ti) {
 /** A-608 BELEG-ORIGINAL: Auftrag belegsuche – nur sha256sum und curl PUT des Originals; die Prüfsumme der Datei (kein Verweis) muss in lease.originale stehen, der Host in lease.upload_hosts. */
 export function originalPruefen(c) {
   const m = BASH_CURL_ORIGINAL.exec(c), k = BASH_CURL_CSV.exec(c), pm = BASH_PDF_MAIL.exec(c);
-  if (c.includes("..") || !(BASH_SHA.test(c) || m || k || pm)) return nein("Bash", "im Auftrag belegsuche nur sha256sum, curl PUT des aus Drive oder Gmail geladenen Originals bzw. der CSV (CSV-Modus) und pdf.py --mail.");
+  if (c.includes("..") || !(BASH_SHA.test(c) || BASH_WC.test(c) || m || k || pm)) return nein("Bash", "im Auftrag belegsuche nur sha256sum, wc -c, curl PUT des aus Drive oder Gmail geladenen Originals bzw. der CSV (CSV-Modus) und pdf.py --mail.");
   if (pm) return dateiSha(".claude/tools/pdf.py") !== PDF_RENDERER_SHA256 ? nein("Bash", "pdf.py verändert oder nicht lesbar.") // A-657 GO pdf.py: Eingang nur die vom Hook gesicherte Rohmail
     : leaseRohmails().some((o) => o.datei === pm[1] && o.sha256 === dateiSha(pm[1])) ? frei() : nein("Bash", "pdf.py --mail nur für die Rohmail, die der Hook aus Gmail get_message RAW gesichert hat (Prüfsumme).");
   if (k) return leaseRoh()?.csv !== true || !dateiSha(k[1]) ? nein("Bash", "CSV-Upload nur im CSV-Modus der Belegsuche (job.bezug.csv) und nur für arbeit/belegsuche-<kürzel>.csv.") // A-657

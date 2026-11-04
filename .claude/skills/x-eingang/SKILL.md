@@ -15,7 +15,7 @@ Jeder EXAVA-Aufruf trägt `job_id`, `lauf_id`, `lease_generation`, `lease_token`
 
 ## 2. Je Dokument laden
 1. `mcp__EXAVA_Hintergrund__exava_datei_lesen(job_id, lauf_id, lease_generation, lease_token, dokument_id)` → `name`, `mime`, `size_bytes`, `sha256` (kann fehlen), `download_url` (signiert, höchstens 600 s), `expires_at`.
-2. Genau diese Form (andere Shell-Befehle sperrt der Hook): `/usr/bin/curl -q -sSfL -o arbeit/<dokument_id>.<endung> "<download_url>"` – `<endung>` aus `name` bzw. `mime` (`pdf`, `jpg`, `jpeg`, `png`, `webp`, `heic`, `tif`, `tiff`, `docx`, `xlsx`, `csv`, `txt`), die URL unverändert in Anführungszeichen; enthält der Teil `&download=…` andere Zeichen als Buchstaben, Ziffern und `._%()~-`, lässt du nur diesen Teil weg. Andere Endungen → überspringen.
+2. Genau diese Form (andere Shell-Befehle sperrt der Hook): `/usr/bin/curl -q -sSfL --max-time 120 -o arbeit/<dokument_id>.<endung> "<download_url>"` – `<endung>` aus `name` bzw. `mime` (`pdf`, `jpg`, `jpeg`, `png`, `webp`, `heic`, `tif`, `tiff`, `docx`, `xlsx`, `csv`, `txt`), die URL unverändert in Anführungszeichen; enthält der Teil `&download=…` andere Zeichen als Buchstaben, Ziffern und `._%()~-`, lässt du nur diesen Teil weg. Andere Endungen → überspringen.
 3. Die `download_url` gibst du nie weiter und schreibst sie nie in Ergebnisse, Fakten, Wiki oder Berichte.
 4. Download abgelaufen oder 4xx → genau einmal `exava_datei_lesen` neu aufrufen (neue URL), sonst überspringen.
 
