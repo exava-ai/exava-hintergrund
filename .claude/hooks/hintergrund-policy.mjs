@@ -13,6 +13,8 @@
 //   A-901 (Bauherr 02.11.2026): dazu im Helfer genau ingest_document von „EXAVA Hintergrund“ (scanIngest) – die Lease setzt dieser Hook per updatedInput aus .exava/lease.json, der Helfer bekommt sie nie;
 //   A-901 Teil 2: den Helfer nur im Vordergrund (run_in_background: false) und nur mit subagent_type, prompt, description starten (SCAN_AGENT_FELDER); sein erster Aufruf bindet
 //   ihn an den laufenden Auftrag (.exava/helfer-<sha256>.json, einzige Datei, die dieser Hook schreibt) – nach einem Auftragswechsel keine Lease mehr für ihn;
+//   A-930 (Weg A): dritter Helfer x-drive-batch (Ausführungsauftrag bezug.nur_ausfuehren) – im Helfer EXAVA nur ausfuehrung_liste, exava_datei_lesen und heartbeat_job (Lease per updatedInput
+//   wie A-901), Drive lesend plus am Ort umbenennen und WhatsApp-Upload nach hygieneAusnahme (dieselben Prüfungen wie im Hauptlauf), Bash nur curl -o von der download_url (BASH_LADEN);
 //   EXAVA nur vom Connector „EXAVA Hintergrund“ und nur die Werkzeuge in EXAVA_WERKZEUGE (der Server prüft Profil, Auftrag und Lease zusätzlich);
 //   Gmail, Google Drive, Google Calendar nur Werkzeuge der Klasse „lesen“ mit Profil recherche und nur geprüfte Eingabefelder;
 //   A-531 F1 (Grundregel 7, A-498/E-1109: „Lesen frei“): jeder andere Connector lesend nach lesend() aus sperre.mjs (wortgleich); schreibend nur gesteuert (MCP-1, unten), UUID-Namen und ungültige Zeichen sonst capability_missing; EXAVA-Namen bleiben gesperrt;
@@ -47,7 +49,7 @@ export const VERTRAG_SERVER = new Set(["gmail", "google_drive", "google_calendar
 /** Servername des Connectors „EXAVA Hintergrund“ nach mcpTeile: Anzeigename klein, Leerzeichen und „-“ → „_“ (beobachtet: mcp__Google_Drive__ aus „Google Drive“, mcp__Google-Drive__ aus Routinen der Oberfläche). */
 export const EXAVA_SERVER = "exava_hintergrund";
 /** Werkzeugvertrag ABHOLEN (PROFIL_WERKZEUGE.hintergrund): arbeit_holen + recherche ohne claim_job und ohne prepare_file_upload; A-531 + genau ingest_document, ingest_facts, ingest_wiki (Profil ingest; welcher Auftrag sie nutzen darf, prüft der Server) und whatsapp_lesen (nur lesend, #1239); A-531 AUSFUEHRUNG get_approved_draft (nur lesend, nur im Versandauftrag – der Server prüft Profil und Lease); A-531 OFFENE-POSTEN-HG get_open_items (nur lesend wie read_knowledge; Profil, Auftrag, Lease prüft der Server); A-549 mail_lesen (nur lesend, nur IMAP); A-597 mail_archivieren (nur im Auftrag Postfach-Hygiene, Label Posteingang entfernen – Auftrag, Lease und Rechte prüft der Server). */
-export const EXAVA_WERKZEUGE = new Set(["arbeit_holen", "heartbeat_job", "read_knowledge", "get_unmatched_transactions", "submit_evidence", "propose_booking", "save_draft", "ask_user", "complete_job", "ingest_document", "ingest_facts", "ingest_wiki", "whatsapp_lesen", "anrufnotizen_lesen", "get_approved_draft", "prepare_file_upload", "get_open_items", "mail_lesen", "mail_archivieren", "support_offen_lesen", "support_zuordnen", "regel_vorschlagen", "regel_postfaecher", "exava_datei_lesen", "rueckfragen_pruefen", "rueckfrage_im_postfach_erledigt", "belegsuche_ergebnis", "projekt_stand_lesen", "projekt_stand_setzen", "browser_starten", "browser_lesen", "browser_handeln", "browser_werte_melden", "browser_beenden"]); // A-882 S3 browser_*: nur recherche-Auftrag mit job.bezug.browser, Absenden nur als Freigabe-Anforderung (prüft der Server) // A-787 regel_postfaecher: nur Arbeitsauftrag, Postfächer einer Mail-Automatisierung (prüft der Server) // A-706: Projektstand im Auftrag (Lease, Rechte und Gesellschaftsrecht prüft der Server) // A-607: Rückfragen nur im Auftrag Postfach-Hygiene abgleichen (prüft der Server); A-578 P4: nur Betreiber und nur Auftrag skill x-support (prüft der Server); A-600 FOLGE regel_vorschlagen: nur Arbeitsauftrag, Regel immer aus (prüft der Server); A-600 FOLGE exava_datei_lesen: nur Eingangsauftrag, nur lesend (Lease und Bezug prüft der Server)
+export const EXAVA_WERKZEUGE = new Set(["arbeit_holen", "heartbeat_job", "read_knowledge", "get_unmatched_transactions", "submit_evidence", "propose_booking", "save_draft", "ask_user", "complete_job", "ingest_document", "ingest_facts", "ingest_wiki", "whatsapp_lesen", "anrufnotizen_lesen", "get_approved_draft", "prepare_file_upload", "get_open_items", "mail_lesen", "mail_archivieren", "support_offen_lesen", "support_zuordnen", "regel_vorschlagen", "regel_postfaecher", "exava_datei_lesen", "rueckfragen_pruefen", "rueckfrage_im_postfach_erledigt", "belegsuche_ergebnis", "projekt_stand_lesen", "projekt_stand_setzen", "browser_starten", "browser_lesen", "browser_handeln", "browser_werte_melden", "browser_beenden", "ausfuehrung_liste"]); // A-930: Liste des Ausführungsauftrags (liest nur der Helfer x-drive-batch) // A-882 S3 browser_*: nur recherche-Auftrag mit job.bezug.browser, Absenden nur als Freigabe-Anforderung (prüft der Server) // A-787 regel_postfaecher: nur Arbeitsauftrag, Postfächer einer Mail-Automatisierung (prüft der Server) // A-706: Projektstand im Auftrag (Lease, Rechte und Gesellschaftsrecht prüft der Server) // A-607: Rückfragen nur im Auftrag Postfach-Hygiene abgleichen (prüft der Server); A-578 P4: nur Betreiber und nur Auftrag skill x-support (prüft der Server); A-600 FOLGE regel_vorschlagen: nur Arbeitsauftrag, Regel immer aus (prüft der Server); A-600 FOLGE exava_datei_lesen: nur Eingangsauftrag, nur lesend (Lease und Bezug prüft der Server)
 /** A-531 F1: bekannte EXAVA-Werkzeuge außerhalb von EXAVA_WERKZEUGE – über fremde oder UUID-Connectoren nie frei, auch wenn der Name lesend klingt (get_approved_draft). */
 export const EXAVA_BEKANNT = new Set(["claim_job", "claim_sync_window", "prepare_file_upload", "get_open_items", "get_financial_overview"]);
 /** Wortgleich aus sperre.mjs (scripts/test/a529-vorlage.ts prüft die Gleichheit). */
@@ -91,7 +93,11 @@ export function eingabeLesend(werkzeug, ti) {
 export const SCAN_AGENT = "x-scan";
 /** A-914: zweiter Helfer x-triage (Vorsortierung, .claude/agents/x-triage.md) – gleiche Startregeln, im Helfer nur Read, ToolSearch, Drive/Gmail lesend, kein EXAVA-Werkzeug. */
 export const TRIAGE_AGENT = "x-triage";
-const HELFER = new Set([SCAN_AGENT, TRIAGE_AGENT]);
+/** A-930 (Weg A): dritter Helfer x-drive-batch (.claude/agents/x-drive-batch.md) – führt die fertig berechnete Liste des Ausführungsauftrags aus (gleiche Startregeln). */
+export const DRIVE_AGENT = "x-drive-batch";
+const HELFER = new Set([SCAN_AGENT, TRIAGE_AGENT, DRIVE_AGENT]);
+/** A-930: EXAVA-Werkzeuge des Helfers x-drive-batch und ihre Felder (Verträge in lib/x/connector/symbiose-schemata.ts); job_id, lauf_id, lease_generation, lease_token setzt der Hook. */
+export const DRIVE_EXAVA = { ausfuehrung_liste: ["seite"], exava_datei_lesen: ["dokument_id"], heartbeat_job: ["schritt", "drive_dateien"] };
 const SCAN_EINGEBAUT = new Set(["Read", "ToolSearch", "SubagentHandback"]), SCAN_SERVER = new Set(["gmail", "google_drive"]); // A-919: SubagentHandback = Rückgabeweg des Helfers an die Routine (Claude Code), ohne ihn kommt kein Ergebnis an
 /** A-901: das eine EXAVA-Werkzeug des Helfers und seine Felder (Vertrag ingest_document, lib/x/connector/symbiose-schemata.ts); die vier Lease-Felder überschreibt scanIngest immer. */
 export const SCAN_EXAVA = "ingest_document";
@@ -367,6 +373,16 @@ export function scanIngest(name, ti, agentId) {
   return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "A-901 Lease aus .exava/lease.json",
     updatedInput: { ...ti, job_id: l.job_id, lauf_id: l.lauf_id, lease_generation: l.lease_generation, lease_token: l.lease_token } } }) };
 }
+/** A-930: EXAVA-Aufruf aus dem Helfer x-drive-batch – nur DRIVE_EXAVA mit dessen Feldern, nur unter der Lease des Auftrags, an den der Helfer gebunden ist; die Lease setzt der Hook. */
+export function driveBatchExava(name, werkzeug, ti, agentId) {
+  const l = leaseRoh(), felder = Object.hasOwn(DRIVE_EXAVA, werkzeug) ? DRIVE_EXAVA[werkzeug] : null;
+  if (!felder || !NUR(ti ?? {}, [...felder, "job_id", "lauf_id", "lease_generation", "lease_token"])) return nein(name, `im Helfer ${DRIVE_AGENT} nur ${Object.keys(DRIVE_EXAVA).join(", ")} mit deren Feldern.`);
+  if (!l || !UUID_LEASE.test(String(l.job_id)) || !UUID_LEASE.test(String(l.lauf_id)) || !Number.isInteger(l.lease_generation) || l.lease_generation < 1 || !/^[A-Za-z0-9_-]{20,200}$/.test(l.lease_token))
+    return nein(name, `im Helfer ${DRIVE_AGENT} nur mit der Lease des laufenden Auftrags (arbeit_holen).`);
+  if (helferAuftrag(agentId) !== l.job_id) return nein(name, `im Helfer ${DRIVE_AGENT} nur für den Auftrag, unter dem er gestartet wurde.`);
+  return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "A-930 Lease aus .exava/lease.json",
+    updatedInput: { ...(ti ?? {}), job_id: l.job_id, lauf_id: l.lauf_id, lease_generation: l.lease_generation, lease_token: l.lease_token } } }) };
+}
 /** Entscheidung für eine Hook-Eingabe (JSON-Text). `vertrag` ist austauschbar (Test). Liefert { code, stderr?, stdout? } (stdout nur für die Lease-Weitergabe an x-scan, A-901). */
 export function entscheide(roh, { vertrag } = {}) {
   let eingabe;
@@ -378,12 +394,15 @@ export function entscheide(roh, { vertrag } = {}) {
   if (scan) helferBinden(eingabe.agent_id); // A-901 Teil 2: der erste Aufruf bindet den Helfer an den laufenden Auftrag
   const ag = eingabe.tool_input; // A-901 Teil 2: nur im Vordergrund und nur mit SCAN_AGENT_FELDER
   if (name === "Agent" || name === "Task") return !scan && NUR(ag, SCAN_AGENT_FELDER) && HELFER.has(ag.subagent_type) && ag.run_in_background === false && typeof ag.prompt === "string" && ag.prompt.trim() !== ""
-    ? frei() : nein(name, `nur die Helfer ${SCAN_AGENT} und ${TRIAGE_AGENT} mit subagent_type, prompt, description und run_in_background: false (nie im Hintergrund, kein model/effort), aus dem Helfer kein weiterer.`);
+    ? frei() : nein(name, `nur die Helfer ${SCAN_AGENT}, ${TRIAGE_AGENT} und ${DRIVE_AGENT} mit subagent_type, prompt, description und run_in_background: false (nie im Hintergrund, kein model/effort), aus dem Helfer kein weiterer.`);
+  if (!teile && scan && eingabe.agent_type === DRIVE_AGENT && name === "Bash") return BASH_LADEN.test(String(eingabe.tool_input?.command ?? "")) ? bashPruefen(eingabe.tool_input) // A-930: WhatsApp-Dokument laden
+    : nein(name, `im Helfer ${DRIVE_AGENT} nur curl -o nach arbeit/<dokument_id>.<endung> von der download_url aus exava_datei_lesen.`);
   if (!teile && !scan && name === "Bash") return bashPruefen(eingabe.tool_input);
   if (!teile && !scan && (name === "Write" || name === "Edit")) return schreibPruefen(name, eingabe.tool_input);
   if (!teile && !scan && (name === "WebSearch" || name === "WebFetch")) return webPruefen(name, eingabe.tool_input); // A-626 WEB
   if (!teile) return (scan ? SCAN_EINGEBAUT : EINGEBAUT).has(name) ? frei() : nein(name, "nur Read, Glob, Grep, Skill, ToolSearch, TodoWrite (Shell nur in festen Formen, Web nur in Arbeits-, Prüf- und Antwortaufträgen, Schreiben nur unter arbeit/, Helfer nur x-scan).");
   if (scan && eingabe.agent_type === SCAN_AGENT && teile.server === EXAVA_SERVER && teile.werkzeug === SCAN_EXAVA) return scanIngest(name, eingabe.tool_input, eingabe.agent_id); // A-901: genau dieses EXAVA-Werkzeug, Lease vom Hook
+  if (scan && eingabe.agent_type === DRIVE_AGENT && teile.server === EXAVA_SERVER) return driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id); // A-930
   if (scan && (teile.server === EXAVA_SERVER || teile.server.startsWith("exava") || gesteuert(teile))) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} von „EXAVA Hintergrund“, keine anderen EXAVA- und keine Schreibwerkzeuge.`);
   if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
   if (gesteuert(teile) && !EXAVA_WERKZEUGE.has(teile.werkzeug) && !EXAVA_BEKANNT.has(teile.werkzeug)) return frei(); // A-531 AUSFUEHRUNG: Entscheidung bei x-ausfuehrung.mjs (Lease + Freigabe)
@@ -394,7 +413,8 @@ export function entscheide(roh, { vertrag } = {}) {
     const treffer = [...VERTRAG_SERVER].filter((s) => hat(v.server[s], teile.werkzeug));
     // Hauptsession 16.10.2026 (#1195): „EXAVA Hintergrund“ kann ebenfalls mit UUID erscheinen → nur die EXAVA_WERKZEUGE und nur ohne Namensgleichheit mit einem Vertragswerkzeug;
     // EXAVA erzwingt Profil, Lease und Rechte serverseitig (dieser Hook ist dort die zweite Schicht). Jedes andere EXAVA-Werkzeug per UUID bleibt gesperrt.
-    if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA && eingabe.agent_type === SCAN_AGENT ? scanIngest(name, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-901: wie EXAVA_WERKZEUGE per UUID
+    if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA && eingabe.agent_type === SCAN_AGENT ? scanIngest(name, eingabe.tool_input, eingabe.agent_id) // A-901: wie EXAVA_WERKZEUGE per UUID
+      : eingabe.agent_type === DRIVE_AGENT && Object.hasOwn(DRIVE_EXAVA, teile.werkzeug) ? driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-930
     if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return startAdresse(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length === 0) return fremdLesend(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length !== 1) return nein(name, "capability_missing: Connector mit UUID-Namen, Werkzeug mehrdeutig, gesperrt bis geprüft.");
@@ -405,7 +425,7 @@ export function entscheide(roh, { vertrag } = {}) {
   v ??= vertrag ?? vertragLesen();
   const e = hat(v.server[server], teile.werkzeug) ? v.server[server][teile.werkzeug] : null;
   if (!e) return nein(name, `nicht im Werkzeugvertrag (${v.version}), gesperrt bis geprüft.`);
-  const hy = scan ? null : hygieneAusnahme(server, teile.werkzeug, eingabe.tool_input ?? {}); // A-534
+  const hy = scan && eingabe.agent_type !== DRIVE_AGENT ? null : hygieneAusnahme(server, teile.werkzeug, eingabe.tool_input ?? {}); // A-534; A-930: x-drive-batch benennt am Ort um und lädt WhatsApp-Dokumente hoch (dieselben Prüfungen)
   if (hy) return hy;
   if (e.klasse !== "lesen" || !e.profile.includes(PROFIL)) return nein(name, "nur lesen: senden, Entwürfe, Labels, teilen, schreiben und löschen sind gesperrt.");
   const ti = eingabe.tool_input ?? {};

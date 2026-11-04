@@ -9,6 +9,8 @@
 //            A-924 Erweiterung: ebenso im Drive-Fenster (Konto aus job.bezug.verbindungen); heartbeat_job → Namen mit file_id aus der Antwort (dokumente.namen) nach lease.umbenennen;
 //            download_file_content im Drive-Fenster → nur die Datei unter arbeit/ (Prüfsumme der Erstaufnahme, Office/Bild als .bin); bestätigter Ordner „WhatsApp“ → lease.whatsapp,
 //            Upload dorthin nur für ein Dokument aus job.bezug.whatsapp_ids (lease.whatsapp_ids), WhatsApp-Dokumente nie nach lease.archiv.
+//            A-930 (Weg A): ausfuehrung_liste (Helfer x-drive-batch) → Umbenennungen der Seite nach lease.umbenennen, WhatsApp-Dokumente nach lease.whatsapp_ids (arbeit_holen kürzt den
+//            Bezug des Ausführungsauftrags); Lease-Änderungen paralleler Aufrufe nacheinander (mitLeaseSperre) und atomar (leaseSchreiben), Fenster von 300 Dateien statt Abbruch.
 //            Gmail get_thread im Versandauftrag: Thread-Stand (IDs, sha256) → /api/x/quellen-beobachtung mit Lease (B10-HINTERGRUND: Antwort nur, wenn der Thread unverändert ist).
 //            prepare_file_upload von „EXAVA Hintergrund“: Host der upload_url → lease.upload_hosts (A-531 COMPLIANCE H2: die Policy lässt curl PUT nur dorthin).
 //            A-600 FOLGE: ebenso exava_datei_lesen – Host der download_url → lease.upload_hosts (die Policy lässt curl -o nur von dort zu).
@@ -36,7 +38,7 @@
 //            A-623 FOLGE: Laden (curl -o nach arbeit/, Skills x-eingang und x-ablage) lässt er in genau dieser Form durch – Host und Pfad prüft die Policy (BASH_LADEN, Host aus der Lease).
 // Host fest (A-305: ein Host für alle Kunden) – nie aus einer Datei, die Claude beschreiben kann. Das Silo aus der Lease ist nur Wegweiser (wie im Token).
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -60,6 +62,22 @@ export function gesteuert(t) { return !!t && ((t.server === "gmail" && (t.werkze
 
 const projekt = (env) => String(env.CLAUDE_PROJECT_DIR || process.cwd());
 const leasePfad = (env) => join(projekt(env), ".exava", "lease.json");
+/** A-930: Lease atomar schreiben (temporäre Datei + rename) – ein paralleler Leser sieht nie eine halbe Datei. */
+const leaseSchreiben = (env, text) => { const t = `${leasePfad(env)}.${process.pid}.tmp`; writeFileSync(t, text); renameSync(t, leasePfad(env)); };
+/** A-930: Lease-Änderungen paralleler Aufrufe (x-drive-batch: 20–25 je Turn) nacheinander – Sperrordner .exava/lease.sperre (mkdir ist atomar), höchstens etwa 5 s warten,
+ *  eine verwaiste Sperre (älter als 10 s) wird übernommen; ohne .exava bzw. nach der Frist ohne Sperre (die Policy prüft weiter jede Datei einzeln). */
+export function mitLeaseSperre(env, f) {
+  const p = join(projekt(env), ".exava", "lease.sperre"), warte = new Int32Array(new SharedArrayBuffer(4));
+  for (let i = 0; i < 500; i++) {
+    try { mkdirSync(p); } catch (x) {
+      if (x?.code !== "EEXIST") return f();
+      try { if (Date.now() - lstatSync(p).mtimeMs > 10_000) rmSync(p, { recursive: true, force: true }); } catch { /* schon frei */ }
+      Atomics.wait(warte, 0, 0, 10); continue;
+    }
+    try { return f(); } finally { try { rmSync(p, { recursive: true, force: true }); } catch { /* frei */ } }
+  }
+  return f();
+}
 const vermerkPfad = (env, toolUseId) => join(projekt(env), ".exava", `ausfuehrung-${createHash("sha256").update(String(toolUseId)).digest("hex").slice(0, 32)}.json`);
 const nein = (grund) => ({ code: 2, stderr: `Gesperrt (EXAVA-Ausführung): ${grund}` });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -190,7 +208,7 @@ function anhangMerken(eingabe, env) {
     const sha256 = String(o.sha256 ?? "").toLowerCase();
     if (/^[0-9a-f]{64}$/.test(sha256) && typeof o.download_url === "string" && !liste.some((x) => x.sha256 === sha256) && liste.length < 50) liste.push({ sha256, ...(Number.isSafeInteger(o.size_bytes) ? { groesse: o.size_bytes } : {}) });
   }
-  if (liste.length > vorher) writeFileSync(leasePfad(env), JSON.stringify({ ...l, anhaenge: liste }));
+  if (liste.length > vorher) leaseSchreiben(env, JSON.stringify({ ...l, anhaenge: liste }));
 }
 /** A-615: Drive get_file_metadata im Auftrag ablage – ein bestätigter eigener Ordner (lease.ordner) namens „Archiv“ wird lease.archiv; sonst nichts (fail closed). */
 function archivMerken(eingabe, env) {
@@ -200,9 +218,9 @@ function archivMerken(eingabe, env) {
   const o = alleObjekte(eingabe.tool_response);
   if (o.some((x) => x.isError === true || x.is_error === true)) return;
   const ordner = (name) => o.some((x) => x.id === id && (x.name ?? x.title) === name && x.mimeType === "application/vnd.google-apps.folder"), d = datevAus(l.datev);
-  if (ordner("Archiv")) writeFileSync(leasePfad(env), JSON.stringify({ ...l, archiv: id }));
-  else if (ordner("WhatsApp")) writeFileSync(leasePfad(env), JSON.stringify({ ...l, whatsapp: id })); // A-924 Erweiterung: Ablageordner der WhatsApp-Dokumente
-  else if (d && ordner(d.ordner[2])) writeFileSync(leasePfad(env), JSON.stringify({ ...l, datev_ziel: id })); // A-818 (G5): bestätigter eigener Monatsordner des DATEV-Pakets
+  if (ordner("Archiv")) leaseSchreiben(env, JSON.stringify({ ...l, archiv: id }));
+  else if (ordner("WhatsApp")) leaseSchreiben(env, JSON.stringify({ ...l, whatsapp: id })); // A-924 Erweiterung: Ablageordner der WhatsApp-Dokumente
+  else if (d && ordner(d.ordner[2])) leaseSchreiben(env, JSON.stringify({ ...l, datev_ziel: id })); // A-818 (G5): bestätigter eigener Monatsordner des DATEV-Pakets
 }
 /** A-924 AM ORT: geplante Umbenennungen aus job.bezug.umbenennen (von EXAVA, nie vom Modell) – { file_id, titel } mit Drive-ID und Name ≤ 220 Zeichen, höchstens 20. */
 const umbenennenAus = (u) => (Array.isArray(u) ? u : []).filter((x) => x && typeof x.file_id === "string" && /^[A-Za-z0-9_-]{6,200}$/.test(x.file_id) && typeof x.titel === "string" && x.titel.length > 0 && x.titel.length <= 220)
@@ -217,7 +235,17 @@ function namenMerken(eingabe, env) {
   const liste = umbenennenAus(neu);
   if (!liste.length) return;
   const alt = umbenennenAus(l.umbenennen).filter((x) => !liste.some((y) => y.file_id === x.file_id));
-  writeFileSync(leasePfad(env), JSON.stringify({ ...l, umbenennen: [...alt, ...liste].slice(-300) }));
+  leaseSchreiben(env, JSON.stringify({ ...l, umbenennen: [...alt, ...liste].slice(-300) }));
+}
+/** A-930 (Weg A): ausfuehrung_liste – Einträge der Seite (von EXAVA, nie vom Modell): Umbenennungen nach lease.umbenennen, WhatsApp-Dokumente nach lease.whatsapp_ids (je die letzten 300 bzw. 150). */
+function ausfuehrungMerken(eingabe, env) {
+  let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
+  if (!l || l.art !== "ablage" || !leaseLesen(env) || alleObjekte(eingabe.tool_response).some((x) => x.isError === true || x.is_error === true)) return;
+  const eintraege = antwortObjekte(eingabe.tool_response).flatMap((x) => (Array.isArray(x?.eintraege) ? x.eintraege : []));
+  const um = umbenennenAus(eintraege.filter((x) => x?.art === "umbenennen")), wa = eintraege.filter((x) => x?.art === "whatsapp" && typeof x.dokument_id === "string" && UUID.test(x.dokument_id)).map((x) => x.dokument_id.toLowerCase());
+  if (!um.length && !wa.length) return;
+  const alt = umbenennenAus(l.umbenennen).filter((x) => !um.some((y) => y.file_id === x.file_id)), waAlt = (Array.isArray(l.whatsapp_ids) ? l.whatsapp_ids : []).filter((x) => typeof x === "string" && !wa.includes(x));
+  leaseSchreiben(env, JSON.stringify({ ...l, umbenennen: [...alt, ...um].slice(-300), whatsapp_ids: [...waAlt, ...wa].slice(-150) }));
 }
 /** A-534 (G7): Postfächer des Kunden aus job.bezug.verbindungen (von EXAVA, nie vom Modell) – kleingeschrieben, nur mit @, höchstens 20. */
 const adressen = (job) => (Array.isArray(job?.bezug?.verbindungen) ? job.bezug.verbindungen : []).map((v) => v?.adresse).filter((a) => typeof a === "string" && a.includes("@")).map((a) => a.toLowerCase()).slice(0, 20);
@@ -242,7 +270,7 @@ function uploadHostMerken(eingabe, env) {
     // A-846: Upload-URL eines Originals für einen Anhang (purpose dokument_original) mit seiner Prüfsumme – die Policy lässt curl PUT dorthin nur für genau dieses Original zu
     if (o.purpose === "dokument_original" && typeof o.upload_url === "string" && u.protocol === "https:" && /^[0-9a-f]{64}$/.test(String(o.sha256)) && spiegel.length < 10 && !spiegel.some((x) => x.url === o.upload_url)) spiegel.push({ url: o.upload_url, sha256: String(o.sha256) });
   }
-  writeFileSync(leasePfad(env), JSON.stringify({ ...l, upload_hosts: hosts, ...(spiegel.length ? { spiegel } : {}) }));
+  leaseSchreiben(env, JSON.stringify({ ...l, upload_hosts: hosts, ...(spiegel.length ? { spiegel } : {}) }));
 }
 /** A-626 WEB: wortgleich in hintergrund-policy.mjs (scripts/test/a529-vorlage.ts prüft die Gleichheit). */
 export function webAdresse(x) {
@@ -274,7 +302,7 @@ function webMerken(env, adressen) {
   if (!l || !WEB_ARTEN.has(l.art) || !leaseLesen(env)) return;
   const web = new Set(Array.isArray(l.web) ? l.web.filter((x) => typeof x === "string") : []), vorher = web.size;
   for (const a of adressen) { const h = webAdresse(a); if (h && web.size < WEB_MAX) web.add(h); }
-  if (web.size > vorher) writeFileSync(leasePfad(env), JSON.stringify({ ...l, web: [...web] }));
+  if (web.size > vorher) leaseSchreiben(env, JSON.stringify({ ...l, web: [...web] }));
 }
 /** A-626 WEB: nach WebFetch einer erlaubten Adresse lädt der Hook dieselbe Seite selbst (GET ohne Daten) und merkt Zieladresse und Links (href, ≤ 2.000) – Links kommen so von der Seite,
  *  nie aus der Zusammenfassung des Modells. Kein HTML: nur die Zieladresse. Fehler → nichts. */
@@ -348,7 +376,7 @@ function originalMerken(eingabe, env, quelle) {
     writeFileSync(join(projekt(env), datei), buf);
     if (!nurDatei && !originale.some((x) => x.sha256 === sha256 && x.datei === datei)) originale = [...originale, { datei, sha256 }];
   });
-  if (originale.length > vorher) writeFileSync(leasePfad(env), JSON.stringify({ ...l, originale }));
+  if (originale.length > vorher) leaseSchreiben(env, JSON.stringify({ ...l, originale }));
 }
 /** A-657 GO pdf.py: Mail ohne PDF-/Bild-Anhang → Rohmail (≤ 2 MiB, Grenze von pdf.py) nach arbeit/gmail-<messageId>.eml, SHA-256 in lease.rohmails (höchstens 10) – nur sie darf pdf.py --mail lesen. */
 function rohmailMerken(l, id, buf, env) {
@@ -358,7 +386,7 @@ function rohmailMerken(l, id, buf, env) {
   if ([join(projekt(env), "arbeit"), join(projekt(env), datei)].some((x) => { try { return lstatSync(x).isSymbolicLink(); } catch { return false; } })) return; // nie über einen Verweis schreiben
   writeFileSync(join(projekt(env), datei), buf);
   const sha256 = createHash("sha256").update(buf).digest("hex");
-  writeFileSync(leasePfad(env), JSON.stringify({ ...l, rohmails: [...rohmails.filter((x) => x.datei !== datei), { datei, sha256 }] }));
+  leaseSchreiben(env, JSON.stringify({ ...l, rohmails: [...rohmails.filter((x) => x.datei !== datei), { datei, sha256 }] }));
 }
 /** A-657 GO pdf.py (PostToolUse Bash): nach pdf.py --mail einer gemerkten Rohmail (Prüfsumme erneut gerechnet) wird die erzeugte PDF ein Original in lease.originale – nur wenn pdf.py
  *  genau diese Datei meldet, sie eine reguläre Datei mit %PDF- ist (≤ 20 MiB). Eine selbst geschriebene PDF gibt es im Auftrag belegsuche nicht (Write gesperrt). */
@@ -372,7 +400,7 @@ function mailPdfMerken(eingabe, env) {
   let gemeldet = null; try { gemeldet = JSON.parse(String(eingabe.tool_response?.stdout ?? "").trim())?.datei; } catch { /* kein JSON */ }
   if (!eml || !pdf || gemeldet !== m[3] || originalEndung(pdf) !== "pdf" || !(Array.isArray(l.rohmails) && l.rohmails.some((x) => x?.datei === m[1] && x.sha256 === sha(eml)))) return;
   const originale = Array.isArray(l.originale) ? l.originale.filter((x) => x && typeof x.sha256 === "string" && typeof x.datei === "string" && x.datei !== m[3]) : [];
-  if (originale.length < 10) writeFileSync(leasePfad(env), JSON.stringify({ ...l, originale: [...originale, { datei: m[3], sha256: sha(pdf) }] }));
+  if (originale.length < 10) leaseSchreiben(env, JSON.stringify({ ...l, originale: [...originale, { datei: m[3], sha256: sha(pdf) }] }));
 }
 /** A-534 (G7): Ordner-ID aus get_file_permissions nur dann in lease.ordner, wenn ein verbundenes Postfach Eigentümer ist und die Lease-Art ablage lautet; sonst nichts (fail closed). */
 function ordnerBestaetigen(eingabe, env) {
@@ -387,8 +415,8 @@ function ordnerBestaetigen(eingabe, env) {
   const rechte = alleObjekte(eingabe.tool_response).filter((x) => typeof x.role === "string"); // Rechte samt permissionDetails (geerbte Freigaben eines Ordners stehen als eigene Rechte darin)
   const ungeteilt = Array.isArray(l.ungeteilt) ? l.ungeteilt.filter((x) => typeof x === "string") : [];
   const nurEigen = rechte.length > 0 && rechte.every((x) => x.role === "owner" && (x.type === undefined || x.type === "user") && (typeof x.emailAddress !== "string" || l.adressen.includes(x.emailAddress.toLowerCase())));
-  const neu = { ...(l.art !== "ablage" || ordner.includes(id) || ordner.length >= 20 ? {} : { ordner: [...ordner, id] }), ...(nurEigen && !ungeteilt.includes(id) && ungeteilt.length < 300 ? { ungeteilt: [...ungeteilt, id] } : {}) }; // A-924 Erweiterung: Ordner nur in der Ablage, bis 300 Dateien
-  if (Object.keys(neu).length) writeFileSync(leasePfad(env), JSON.stringify({ ...l, ...neu }));
+  const neu = { ...(l.art !== "ablage" || ordner.includes(id) || ordner.length >= 20 ? {} : { ordner: [...ordner, id] }), ...(nurEigen && !ungeteilt.includes(id) ? { ungeteilt: [...ungeteilt, id].slice(-300) } : {}) }; // A-924 Erweiterung: Ordner nur in der Ablage; A-930: die letzten 300 Dateien (Ausführungslauf ≤ 500)
+  if (Object.keys(neu).length) leaseSchreiben(env, JSON.stringify({ ...l, ...neu }));
 }
 
 /** B10-HINTERGRUND: Thread-Stand aus der echten Antwort von Gmail get_thread (wie quellenbeobachtung.mjs, A-516 P4a): thread_id, alle Message-IDs, letzte; jede Abweichung → nicht lesbar. */
@@ -422,17 +450,18 @@ export async function nachher(eingabe, { env = process.env, f = fetch } = {}) {
     const o = antwortObjekte(eingabe.tool_response).find((x) => typeof x.lease_token === "string" && x.job && typeof x.lauf_id === "string");
     mkdirSync(join(projekt(env), ".exava"), { recursive: true });
     mkdirSync(join(projekt(env), "arbeit"), { recursive: true }); // A-632 FOLGE: curl -o legt keinen Ordner an – arbeit/ steht vor dem ersten Laden
-    writeFileSync(leasePfad(env), JSON.stringify(o ? { job_id: o.job.id, lauf_id: o.lauf_id, lease_token: o.lease_token, ...(Number.isInteger(o.lease_generation) ? { lease_generation: o.lease_generation } : {}) /* A-901: Lease-Weitergabe an x-scan */, ...(typeof o.silo === "string" ? { silo: o.silo } : {}), ...(typeof o.job.art === "string" ? { art: o.job.art } : {}), ...(o.job.art === "belegsuche" && o.job.bezug?.csv === true ? { csv: true } : {}), ...(o.job.art === "ablage" && datevAus(o.job.bezug?.datev_paket) ? { datev: datevAus(o.job.bezug.datev_paket) } : {}) /* A-818 */, ...(o.job.art === "ablage" && umbenennenAus(o.job.bezug?.umbenennen).length ? { umbenennen: umbenennenAus(o.job.bezug.umbenennen) } : {}) /* A-924 AM ORT */, adressen: adressen(o.job),
+    leaseSchreiben(env, JSON.stringify(o ? { job_id: o.job.id, lauf_id: o.lauf_id, lease_token: o.lease_token, ...(Number.isInteger(o.lease_generation) ? { lease_generation: o.lease_generation } : {}) /* A-901: Lease-Weitergabe an x-scan */, ...(typeof o.silo === "string" ? { silo: o.silo } : {}), ...(typeof o.job.art === "string" ? { art: o.job.art } : {}), ...(o.job.art === "belegsuche" && o.job.bezug?.csv === true ? { csv: true } : {}), ...(o.job.art === "ablage" && datevAus(o.job.bezug?.datev_paket) ? { datev: datevAus(o.job.bezug.datev_paket) } : {}) /* A-818 */, ...(o.job.art === "ablage" && umbenennenAus(o.job.bezug?.umbenennen).length ? { umbenennen: umbenennenAus(o.job.bezug.umbenennen) } : {}) /* A-924 AM ORT */, adressen: adressen(o.job),
       ...(Array.isArray(o.job.bezug?.whatsapp_ids) ? { whatsapp_ids: o.job.bezug.whatsapp_ids.filter((x) => typeof x === "string" && UUID.test(x)).map((x) => x.toLowerCase()).slice(0, 50) } : {}) /* A-924 Erweiterung */,
       ...(WEB_ARTEN.has(o.job.art) ? { web: [...new Set(textAdressen(o.job.eingabe))] } : {}) } : {})); // A-534: art und Postfächer für die Ausnahmen der Policy; A-626 WEB: Adressen aus dem Auftrag
     return { code: 0 };
   }
-  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_file_permissions") { ordnerBestaetigen(eingabe, env); return { code: 0 }; }
-  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_file_metadata") { archivMerken(eingabe, env); return { code: 0 }; } // A-615
-  if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "heartbeat_job") { namenMerken(eingabe, env); return { code: 0 }; } // A-924 Erweiterung: Namen zum Umbenennen am Ort
+  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_file_permissions") { mitLeaseSperre(env, () => ordnerBestaetigen(eingabe, env)); return { code: 0 }; } // A-930: parallel sicher
+  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_file_metadata") { mitLeaseSperre(env, () => archivMerken(eingabe, env)); return { code: 0 }; } // A-615
+  if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "heartbeat_job") { mitLeaseSperre(env, () => namenMerken(eingabe, env)); return { code: 0 }; } // A-924 Erweiterung: Namen zum Umbenennen am Ort
+  if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "ausfuehrung_liste") { mitLeaseSperre(env, () => ausfuehrungMerken(eingabe, env)); return { code: 0 }; } // A-930 (Weg A)
   if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "download_file_content") { originalMerken(eingabe, env, "drive"); return { code: 0 }; } // A-608 BELEG-ORIGINAL
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "browser_lesen" || t.werkzeug === "browser_beenden")) { uploadHostMerken(eingabe, env); return { code: 0 }; } // A-882: download_url der Eingangsbestätigung (Speicher-Host wie exava_datei_lesen)
-  if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "prepare_file_upload" || t.werkzeug === "exava_datei_lesen")) { uploadHostMerken(eingabe, env); if (t.werkzeug === "exava_datei_lesen") anhangMerken(eingabe, env); return { code: 0 }; } // A-818: Prüfsummen der geladenen Dateien
+  if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "prepare_file_upload" || t.werkzeug === "exava_datei_lesen")) { mitLeaseSperre(env, () => { uploadHostMerken(eingabe, env); if (t.werkzeug === "exava_datei_lesen") anhangMerken(eingabe, env); }); return { code: 0 }; } // A-818: Prüfsummen der geladenen Dateien; A-930: parallel sicher
   if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_message" && eingabe.tool_input?.messageFormat === "RAW") { originalMerken(eingabe, env, "gmail"); return { code: 0 }; } // A-608 BELEG-ORIGINAL (Gmail-Anhang)
   if (t && t.server === "gmail" && t.werkzeug === "get_thread") { await threadMelden(eingabe, env, f); return { code: 0 }; }
   if (!gesteuert(t)) return { code: 0 };
