@@ -108,7 +108,7 @@ export const BASH_PDF_MAIL = /^\/usr\/bin\/python3 -I \.claude\/tools\/pdf\.py -
 export const BASH_PDF = new RegExp(String.raw`^/usr/bin/python3 -I \.claude/tools/pdf\.py arbeit/${NAME}\.json arbeit/${NAME}\.pdf$`);
 export const BASH_XLSX = new RegExp(String.raw`^/usr/bin/python3 -I \.claude/tools/xlsx\.py arbeit/${NAME}\.json arbeit/${NAME}\.xlsx$`);
 const GELADEN = String.raw`arbeit/${NAME}\.(?:pdf|jpe?g|png|webp|heic|tiff?|docx?|xlsx?|csv|txt|odt|ods|rtf)`; // A-600 FOLGE: Eingang (x-eingang) – geladene Datei aus exava_datei_lesen; A-642 OFFICE: Formate der Anhang-Ablage
-export const BASH_SHA = new RegExp(String.raw`^/usr/bin/sha256sum (?:${DATEI}|${GELADEN})$`);
+export const BASH_SHA = new RegExp(String.raw`^/usr/bin/sha256sum (?:${DATEI}|${GELADEN}|arbeit/drive-[A-Za-z0-9_-]{6,120}\.bin)$`); // A-924 Erweiterung: Prüfsumme einer vom Hook geladenen Drive-Datei (Erstaufnahme)
 export const BASH_LADEN = new RegExp(String.raw`^/usr/bin/curl -q -sSfL -o ${GELADEN} "https://([A-Za-z0-9.-]+)/storage/v1/object/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+(?:&download=[A-Za-z0-9._%()~+-]*)?"$`); // A-632 FOLGE: „+“ = Leerzeichen im Dateinamen
 export const BASH_CURL = new RegExp(String.raw`^/usr/bin/curl -q -sSf -X PUT --data-binary @${DATEI} -H "content-type: ${MIME}" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
 /** A-608 BELEG-ORIGINAL: Upload des Originals (Datei vom Hook unter arbeit/drive-<fileId>.<endung> bzw. arbeit/gmail-<messageId>-<n>.<endung>, Typ wie beleg_original; A-657: …-mail.pdf aus pdf.py --mail). */
@@ -195,7 +195,9 @@ export function leaseDatev() { return leaseArt() === "ablage" ? datevAus(leaseRo
 /** A-534: vom PostToolUse-Hook bestätigte eigene Ordner (get_file_permissions, Eigentümer ist ein verbundenes Postfach); sonst leer. */
 export function leaseOrdner() { const o = leaseRoh()?.ordner; return Array.isArray(o) ? o.filter((x) => typeof x === "string") : []; }
 /** A-924 AM ORT: von EXAVA geplante Umbenennungen des Ablage-Auftrags (job.bezug.umbenennen, nur von x-ausfuehrung.mjs übernommen) { file_id, titel }; sonst leer. */
-export function leaseUmbenennen() { const u = leaseArt() === "ablage" ? leaseRoh()?.umbenennen : null; return Array.isArray(u) ? u.filter((x) => x && typeof x.file_id === "string" && typeof x.titel === "string") : []; }
+/** A-924 Erweiterung: Aufträge, die Drive-Dateien am Ort umbenennen – Ablage (Nachlauf) und Drive-Fenster (lesen und benennen in einem Schritt); wortgleich in x-ausfuehrung.mjs. */
+export const UMBENENNEN_ARTEN = new Set(["ablage", "sync_aktuell", "sync_historisch"]);
+export function leaseUmbenennen() { const u = UMBENENNEN_ARTEN.has(leaseArt()) ? leaseRoh()?.umbenennen : null; return Array.isArray(u) ? u.filter((x) => x && typeof x.file_id === "string" && typeof x.titel === "string") : []; }
 /** A-924 AM ORT: eigene, nicht geteilte Dateien (get_file_permissions: nur Eigentümer-Rechte eines verbundenen Postfachs, x-ausfuehrung.mjs); sonst leer. */
 export function leaseUngeteilt() { const o = leaseRoh()?.ungeteilt; return Array.isArray(o) ? o.filter((x) => typeof x === "string") : []; }
 /** A-531 COMPLIANCE H2: Hosts der Upload-URLs, die x-ausfuehrung.mjs (PostToolUse) aus der Antwort von prepare_file_upload in die Lease schreibt; sonst leer. */
@@ -264,8 +266,11 @@ const ID = (x) => typeof x === "string" && /^[A-Za-z0-9_-]{6,200}$/.test(x), INB
 const ZEICHEN = String.raw`[^/\\<>:"|?*\x00-\x1f]`;
 export const SCHEMA_NAME_RE = new RegExp(String.raw`^\d{4}-\d{2}-\d{2}__(?:[^_/\\<>:"|?*\x00-\x1f]|_(?!_))+__[A-Z][A-Z_]{2,}__${ZEICHEN}*__#[0-9a-f]{8}\.([A-Za-z0-9]{2,5})$`);
 export const schemaName = (n, endung) => { const s = String(n ?? ""), m = SCHEMA_NAME_RE.exec(s); return !!m && s.length <= 220 && (endung ? m[1] === endung : /^(?:pdf|PDF)$/.test(m[1])); };
+/** A-924 Erweiterung: am Ort umbenannt werden alle lesbaren Dokumente, nie Code- oder Systemdateien (.js .ts .py .sql .json .md .txt …). */
+export const UMBENENNEN_ENDUNGEN = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "odt", "ods", "rtf", "jpg", "jpeg", "png", "webp", "heic", "tif", "tiff"];
+export const inPlaceName = (n) => { const m = SCHEMA_NAME_RE.exec(String(n ?? "")); return !!m && UMBENENNEN_ENDUNGEN.includes(m[1].toLowerCase()) && schemaName(n, m[1]); };
 /** A-531 HOOK-AUDIT O1: Ordner, die die Ablage anlegen darf (Eingang wie bisher; Archiv nur in einem bestätigten eigenen Ordner). */
-export const ABLAGE_ORDNER = ["Eingang", "Archiv"];
+export const ABLAGE_ORDNER = ["Eingang", "Archiv", "WhatsApp"]; // A-924 Erweiterung: 00-EXAVA/WhatsApp für WhatsApp-Dokumente
 /** A-642 OFFICE: Endung → MIME eines Mail-Anhangs für den Upload-Platzhalter (wie ANHANG_MIME in x-ausfuehrung.mjs, dort mit Magic Bytes); keine Makro-Formate. */
 export const ANHANG_MIME = { pdf: "application/pdf", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xls: "application/vnd.ms-excel",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", odt: "application/vnd.oasis.opendocument.text", ods: "application/vnd.oasis.opendocument.spreadsheet", rtf: "application/rtf",
@@ -277,26 +282,27 @@ export function hygieneAusnahme(server, werkzeug, ti) {
     ? (server === "gmail" ? "postfach_hygiene" : "ablage") : null;
   if (!art) return null;
   const n = `${server}/${werkzeug}`;
-  if (leaseArt() !== art) return nein(n, `nur in einem Auftrag „${art}“ (Lease aus arbeit_holen).`);
+  const arten = werkzeug === "update_file" ? [...UMBENENNEN_ARTEN] : [art]; // A-924 Erweiterung: am Ort umbenennen auch im Drive-Fenster (lesen und benennen in einem Schritt)
+  if (!arten.includes(leaseArt())) return nein(n, `nur in einem Auftrag „${arten.join("“ oder „")}“ (Lease aus arbeit_holen).`);
   const ok = werkzeug === "unmark_message_spam" ? NUR(ti, ["messageId"]) && ID(ti.messageId)
     : werkzeug === "unmark_thread_spam" ? NUR(ti, ["threadId"]) && ID(ti.threadId)
     : werkzeug === "unlabel_message" ? NUR(ti, ["messageId", "labelIds"]) && ID(ti.messageId) && INBOX(ti.labelIds)
     : werkzeug === "unlabel_thread" ? NUR(ti, ["threadId", "labelIds"]) && ID(ti.threadId) && INBOX(ti.labelIds)
     : werkzeug === "update_message_labels" ? NUR(ti, ["messageId", "removeLabelIds"]) && ID(ti.messageId) && INBOX(ti.removeLabelIds)
     : werkzeug === "update_file" ? NUR(ti, ["fileId", "name", "title"]) && ID(ti.fileId) && (ti.name === undefined) !== (ti.title === undefined) // A-924 AM ORT: nur umbenennen, kein Elternordner (nie verschieben); A-659 title wie name
-      && schemaName(ti.title ?? ti.name) && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name)) // nur genau der Name, den EXAVA geplant hat (job.bezug.umbenennen)
+      && inPlaceName(ti.title ?? ti.name) && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name)) // nur genau der Name, den EXAVA geplant hat (job.bezug.umbenennen)
       && leaseUngeteilt().includes(ti.fileId) // G7: nur eine eigene, nicht geteilte Datei (get_file_permissions)
     : /\.zip$/i.test(String(ti.base64Content ?? "")) ? NUR(ti, ["title", "parentId", "contentMimeType", "base64Content", "disableConversionToGoogleType"]) && !!leaseDatev() // A-818 (G5): DATEV-Paket nur als Platzhalter
       && ti.base64Content === `@arbeit/${leaseDatev().name}.zip` && String(ti.title).startsWith(`${leaseDatev().name}__#`) && /^__#[0-9a-f]{8}\.zip$/.test(String(ti.title).slice(leaseDatev().name.length)) // (Inhalt, Hash und Größe prüft x-ausfuehrung.mjs)
       && ti.contentMimeType === "application/zip" && ti.disableConversionToGoogleType === true && typeof leaseRoh()?.datev_ziel === "string" && ti.parentId === leaseRoh().datev_ziel // nur der bestätigte Monatsordner
     : ti.base64Content !== undefined ? NUR(ti, ["title", "parentId", "contentMimeType", "base64Content", "disableConversionToGoogleType"]) && schemaName(ti.title, anhangEndung(ti.base64Content)) // A-615: Mail-Anhang nur als Platzhalter (Inhalt setzt x-ausfuehrung.mjs), nur nach 00-EXAVA/Archiv; A-924: Name nach Schema
       && !!anhangEndung(ti.base64Content) && ti.contentMimeType === ANHANG_MIME[anhangEndung(ti.base64Content)] && ti.disableConversionToGoogleType === true // A-642 OFFICE: Endung, Titel und MIME passen zusammen
-      && typeof leaseRoh()?.archiv === "string" && ti.parentId === leaseRoh().archiv
+      && [leaseRoh()?.archiv, leaseRoh()?.whatsapp].some((z) => typeof z === "string" && ti.parentId === z) // A-924 Erweiterung: 00-EXAVA/Archiv bzw. 00-EXAVA/WhatsApp (die Bindung der WhatsApp-IDs prüft x-ausfuehrung.mjs)
     : NUR(ti, ["name", "mimeType", "parents", "parentId"]) && ti.mimeType === "application/vnd.google-apps.folder" && (ABLAGE_ORDNER.includes(ti.name) || !!leaseDatev()?.ordner.includes(ti.name)) // A-818: die drei Ordner des DATEV-Pakets
       && (ti.parentId === undefined || ID(ti.parentId)) && (ti.parents === undefined || (Array.isArray(ti.parents) && ti.parents.length === 1 && ID(ti.parents[0])))
       && [ti.parentId, ti.parents?.[0]].every((x) => x === undefined || leaseOrdner().includes(x)) // HOOK-AUDIT F3 (G7): Elternordner nur ein bestätigter eigener Ordner
       && (ti.name === "Eingang" || ti.parentId !== undefined || ti.parents !== undefined); // O1: Archiv nie ohne Elternordner
-  return ok ? frei() : nein(n, "nur in engster Form: Spam aufheben, INBOX entfernen, Datei am Ort umbenennen (nur fileId und title, genau der Name aus job.bezug.umbenennen, nur eine eigene, nicht geteilte Datei nach get_file_permissions – nie verschieben, nie kopieren), Ordner „Eingang“ oder „Archiv“ anlegen (Elternordner nur ein bestätigter eigener), Mail-Anhang als „@arbeit/<datei>.<pdf|docx|xlsx|…>“ mit Namen nach Schema JJJJ-MM-TT__Gesellschaft__TYP__…__#hash8 nach 00-EXAVA/Archiv hochladen, DATEV-Paket als „@arbeit/<name>.zip“ in seinen bestätigten Monatsordner (Ordner nur aus job.bezug.datev_paket) – kein anderer Inhalt, keine Rechte.");
+  return ok ? frei() : nein(n, "nur in engster Form: Spam aufheben, INBOX entfernen, Datei am Ort umbenennen (nur fileId und title, genau der Name aus EXAVA – job.bezug.umbenennen bzw. namen aus heartbeat_job –, alle lesbaren Dokumente, nur eine eigene, nicht geteilte Datei nach get_file_permissions – nie verschieben, nie kopieren), Ordner „Eingang“, „Archiv“ oder „WhatsApp“ anlegen (Elternordner nur ein bestätigter eigener), Anhang als „@arbeit/<datei>.<pdf|docx|xlsx|…>“ mit Namen nach Schema JJJJ-MM-TT__Gesellschaft__TYP__…__#hash8 nach 00-EXAVA/Archiv bzw. ein WhatsApp-Dokument nach 00-EXAVA/WhatsApp hochladen, DATEV-Paket als „@arbeit/<name>.zip“ in seinen bestätigten Monatsordner (Ordner nur aus job.bezug.datev_paket) – kein anderer Inhalt, keine Rechte.");
 }
 export const EINGEBAUT = new Set(["Read", "Glob", "Grep", "Skill", "ToolSearch", "TodoWrite", "SubagentHandback"]); // A-919: Rückgabe eines Helfers – trägt im Hook nicht immer agent_type, gibt nur Text an den Aufrufer
 /** Entwurf #1182: claude.ai-Connectoren können statt eines Namens eine UUID tragen (`mcp__4553787f-…__send_message`, nach mcpTeile mit „_“). */
