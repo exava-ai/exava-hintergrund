@@ -24,7 +24,7 @@ Diese Leseaufrufe sind der ausdrückliche Gegenstand dieses Prüfauftrags – hi
 
 ## 3. Abschließen
 `outcome: completed` nur, wenn du Schritt 1 und für jede verbundene Kategorie den Aufruf aus Schritt 2 wirklich ausgeführt hast.
-`mcp__EXAVA_Hintergrund__complete_job` mit `outcome: completed`, `result_refs: []`, `counters: {gesichtet: <geprüfte Kategorien>, verarbeitet: <davon true>, fehler: <davon false>}` und `connectoren: {drive, gmail, kalender, weitere}` – `drive` (Dateien), `gmail` (Mail, auch Outlook) und `kalender` je geprüfter Kategorie `true`/`false`, `weitere: [{name}]` ohne `erreichbar`. Im Prüfauftrag ist `connectoren` ausdrücklich verlangt; der Hinweis „nicht befüllen“ in der Werkzeugbeschreibung gilt hier nicht.
+`mcp__EXAVA_Hintergrund__complete_job` mit `outcome: completed`, `result_refs: []`, `counters: {gesichtet: <geprüfte Kategorien>, verarbeitet: <davon true>, fehler: <davon false>}` und `connectoren: {drive, gmail, kalender, weitere}` – `drive` (Dateien), `gmail` (Mail, auch Outlook) und `kalender` je geprüfter Kategorie `true`/`false`, `weitere: [{name}]` ohne `erreichbar`. Im Prüfauftrag ist `connectoren` für jede verbundene Kategorie verlangt – nicht nur für die sonst benutzten.
 Ist keine Kategorie verbunden: `outcome: failed`, `counters: {gesichtet: 0}`, `fehler_text: "keine_connectoren"` und `connectoren: {weitere: [{name}]}`.
 Danach weiter mit `arbeit_holen` wie in `routine.md` Schritt 4.
 
