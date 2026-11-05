@@ -107,7 +107,7 @@ export const SCAN_INGEST_FELDER = ["job_id", "lauf_id", "lease_generation", "lea
  *  überdauern und ingest_document unter der Lease des Folgeauftrags rufen (scanIngest liest die Lease beim Aufruf). Nur diese Felder: kein model/effort (Haiku aus x-scan.md), keine isolation/name. */
 export const SCAN_AGENT_FELDER = ["subagent_type", "prompt", "description", "run_in_background"];
 /** A-531 DATEI: die drei erlaubten Shell-Formen (datei-upload.md §3.2), ganzer Befehl verankert; Prüfsumme des Renderers setzt der Generator. */
-export const PDF_RENDERER_SHA256 = "de8c478a47dddaf9999b2f5e8b2c55c1f7c30684b3f4b08f0f4d6d734aba2fef", XLSX_RENDERER_SHA256 = "0643294b441c03a9948810b953ad65cf21ecde7184e0e24111a480c5aab95582"; // A-622 P3-A: Listen als .xlsx
+export const PDF_RENDERER_SHA256 = "62f9c0e6e6f9e460636b208330297b2a9cf31a31285f99b773135ee2c3f8cfa0", XLSX_RENDERER_SHA256 = "0643294b441c03a9948810b953ad65cf21ecde7184e0e24111a480c5aab95582"; // A-622 P3-A: Listen als .xlsx
 const NAME = String.raw`[A-Za-z0-9._-]{1,140}(?:__#[0-9a-f]{8})?`, DATEI = String.raw`arbeit/${NAME}\.(?:pdf|json|csv|docx|xlsx)`;
 const MIME = String.raw`(?:application/pdf|text/csv|application/vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet))`;
 export const BASH_PDF_MAIL = /^\/usr\/bin\/python3 -I \.claude\/tools\/pdf\.py --mail (arbeit\/gmail-([A-Za-z0-9_-]{6,120})\.eml) arbeit\/gmail-\2-mail\.pdf$/; // A-657 GO pdf.py: HTML-Belegmail 1:1
