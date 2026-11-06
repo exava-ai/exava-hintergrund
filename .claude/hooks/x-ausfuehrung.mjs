@@ -21,7 +21,7 @@
 //            A-846 (E-1143): ebenso in den Entwurfsaufträgen SPIEGEL_ARTEN (Original für den Anhang eines Entwurfs, EXAVA-Storage) – prepare_file_upload purpose dokument_original
 //            merkt URL und Prüfsumme in lease.spiegel; die Policy lässt curl PUT dorthin nur für genau dieses gemerkte Original zu.
 //            A-657/A-658: arbeit_holen eines Belegsuche-Auftrags mit job.bezug.csv → lease.csv (die Policy lässt dann Write und Upload der CSV zu).
-//            A-993b Schritt 6 (nur Auftrag belegsuche): mail_archivieren mit selbst_retten → lease.korb_frei (IDs mit Frist, von EXAVA); Gmail search_threads/get_thread/get_message →
+//            A-993b Schritt 6 (Auftrag belegsuche; A-996 auch postfach_hygiene, Schutzschild): mail_archivieren mit selbst_retten → lease.korb_frei (IDs mit Frist, von EXAVA); Gmail search_threads/get_thread/get_message →
 //            Nachrichten mit Label TRASH und Datum ≤ KORB_TAGE Tage → lease.korb_gesehen; untrash_message einer freigegebenen ID → lease.korb_raus; danach INBOX entfernt → lease.korb_fertig.
 //            A-642: Ist das Ergebnis größer als MAX_MCP_OUTPUT_TOKENS, liest der Hook die von Claude Code gespeicherte Ausgabe (<session_id>/tool-results/, gespeicherteAusgabe).
 //            A-626 WEB (nur Aufträge aus WEB_ARTEN, A-782): arbeit_holen → lease.web = Web-Adressen aus dem Auftragstext (job.eingabe ohne angehängten Gesprächsverlauf); WebSearch → Adressen der Treffer
@@ -266,8 +266,8 @@ function ausfuehrungMerken(eingabe, env) {
 export const KORB_TAGE = 14, KORB_MAX = 10;
 const GMAIL_NR = /^[0-9a-f]{10,24}$/i;
 const korbFehler = (eingabe) => alleObjekte(eingabe.tool_response).some((x) => x.isError === true || x.is_error === true);
-/** A-993b Schritt 6: Lease des Auftrags belegsuche (für die Felder korb_*) – sonst null. */
-const korbLease = (env) => { let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return null; } return l && l.art === "belegsuche" && leaseLesen(env) ? l : null; };
+/** A-993b Schritt 6: Lease des Auftrags belegsuche bzw. (A-996, Schutzschild) postfach_hygiene für die Felder korb_* – sonst null; wortgleich KORB_ARTEN in hintergrund-policy.mjs. */
+const korbLease = (env) => { let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return null; } return l && (l.art === "belegsuche" || l.art === "postfach_hygiene") && leaseLesen(env) ? l : null; };
 const korbIds = (l, k) => (Array.isArray(l?.[k]) ? l[k].filter((x) => typeof x === "string") : []);
 /** A-993b Schritt 6: Freigabe von EXAVA (mail_archivieren ohne konto → selbst_retten { ids, bis }) für genau diesen Auftrag → lease.korb_frei; Frist höchstens 60 Minuten. */
 function korbFreigabeMerken(eingabe, env) {
@@ -286,7 +286,7 @@ const korbZeit = (m) => { const d = m.internalDate ?? m.internal_date ?? m.date;
  *  JSON nur aus der MCP-Hülle (antwortObjekte), nie aus Feldern der Mail wie Text, Vorschau oder Anhang – so schleust kein Mailinhalt eine „gesehene“ Nachricht ein. */
 const korbNachrichten = (r) => antwortObjekte(r).flatMap((o) => [o, ...(Array.isArray(o.messages) ? o.messages : []), ...(Array.isArray(o.threads) ? o.threads.flatMap((t) => (Array.isArray(t?.messages) ? t.messages : [])) : [])])
   .filter((m) => m && typeof m === "object");
-/** A-993b Schritt 6: Gmail-Antworten im Auftrag belegsuche – Nachrichten mit Label TRASH und Datum in den letzten KORB_TAGE Tagen → lease.korb_gesehen (höchstens 200). */
+/** A-993b Schritt 6: Gmail-Antworten im Auftrag belegsuche bzw. postfach_hygiene – Nachrichten mit Label TRASH und Datum in den letzten KORB_TAGE Tagen → lease.korb_gesehen (höchstens 200). */
 function korbGesehenMerken(eingabe, env) {
   const l = korbLease(env); if (!l || korbFehler(eingabe)) return;
   const jetzt = Date.now(), grenze = jetzt - KORB_TAGE * 86_400_000;

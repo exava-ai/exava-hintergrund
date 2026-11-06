@@ -11,6 +11,7 @@
 //   A-993b Schritt 6 (Bauherr 06.11.2026): im Auftrag belegsuche Gmail nur über den Claude-Connector – untrash_message (nur messageId) für eine von EXAVA freigegebene Nachricht
 //   (lease.korb_frei aus mail_archivieren ohne konto, mit Frist), die x-ausfuehrung.mjs mit Label TRASH und Datum ≤ 14 Tage gesehen hat (lease.korb_gesehen), höchstens KORB_MAX je Lauf;
 //   danach nur INBOX entfernen für eine so zurückgeholte Nachricht (lease.korb_raus); mail_archivieren mit gerettet: true nur für Nachrichten aus lease.korb_fertig (korbAusnahme, korbMeldung);
+//   A-996: ebenso im Auftrag postfach_hygiene für den Papierkorb-Schutzschild (Kernregel 18) – die Freigabe gibt EXAVA nur im Schutzschild-Lauf (bezug.schutzschild, nur executive);
 //   A-532/A-914: Helfer (Agent, früher Task) nur mit subagent_type x-scan oder x-triage; im Helfer nur Read, ToolSearch und Lesewerkzeuge von Drive und Gmail (ingest_document nur x-scan), sonst kein Subagent;
 //   und im Netz „Trusted“ wäre sie ein Weg nach draußen und an .claude/ vorbei;
 //   A-901 (Bauherr 02.11.2026): dazu im Helfer genau ingest_document von „EXAVA Hintergrund“ (scanIngest) – die Lease setzt dieser Hook per updatedInput aus .exava/lease.json, der Helfer bekommt sie nie;
@@ -298,15 +299,17 @@ export const KORB_MAX = 10;
 export const KORB_GMAIL = new Set(["untrash_message", "unlabel_message", "update_message_labels"]);
 const GMAIL_NR = (x) => typeof x === "string" && /^[0-9a-f]{10,24}$/i.test(x);
 const korbListe = (k) => { const l = leaseRoh()?.[k]; return Array.isArray(l) ? l : []; };
-/** A-993b Schritt 6 (Bauherr 06.11.2026): Beleg aus dem Gmail-Papierkorb ins Archiv, wenn Gmail nur über den Claude-Connector angebunden ist – nur im Auftrag belegsuche.
+/** A-993b Schritt 6 (Bauherr 06.11.2026): Beleg aus dem Gmail-Papierkorb ins Archiv, wenn Gmail nur über den Claude-Connector angebunden ist – nur im Auftrag belegsuche;
+ *  A-996: ebenso kritische Post im Auftrag postfach_hygiene (Papierkorb-Schutzschild, Freigabe von EXAVA nur im Schutzschild-Lauf). KORB_ARTEN = diese beiden Lease-Arten.
  *  untrash_message: nur messageId, von EXAVA freigegeben (lease.korb_frei, Frist), mit TRASH und Datum ≤ 14 Tage gesehen (lease.korb_gesehen), höchstens KORB_MAX je Lauf (lease.korb_raus);
  *  danach unlabel_message bzw. update_message_labels nur mit genau INBOX zum Entfernen für eine hier zurückgeholte Nachricht. Nie trash, nie andere Labels, nie Labels anlegen. */
+export const KORB_ARTEN = new Set(["belegsuche", "postfach_hygiene"]);
 function korbAusnahme(werkzeug, ti) {
   const n = `gmail/${werkzeug}`, id = ti?.messageId, raus = korbListe("korb_raus");
-  if (leaseArt() !== "belegsuche") return nein(n, "nur im Auftrag „belegsuche“ (Lease aus arbeit_holen) für eine von EXAVA freigegebene Nachricht.");
+  if (!KORB_ARTEN.has(leaseArt())) return nein(n, "nur im Auftrag „belegsuche“ bzw. „postfach_hygiene“ (Lease aus arbeit_holen) für eine von EXAVA freigegebene Nachricht.");
   if (werkzeug === "untrash_message") {
     if (!NUR(ti, ["messageId"]) || !GMAIL_NR(id)) return nein(n, "nur messageId (Gmail-Nachrichten-ID).");
-    if (!korbListe("korb_frei").some((x) => x?.id === id && Date.parse(String(x?.bis)) > Date.now())) return nein(n, "nur eine von EXAVA freigegebene Nachricht – erst mail_archivieren ohne konto mit ordner papierkorb, aktion archiv und umsatz_id (Antwort selbst_retten).");
+    if (!korbListe("korb_frei").some((x) => x?.id === id && Date.parse(String(x?.bis)) > Date.now())) return nein(n, "nur eine von EXAVA freigegebene Nachricht – erst mail_archivieren ohne konto mit ordner papierkorb, aktion archiv und umsatz_id bzw. schutzschild (Antwort selbst_retten).");
     if (!korbListe("korb_gesehen").includes(id)) return nein(n, "nur eine Nachricht, die du mit includeTrash im Papierkorb der letzten 14 Tage gefunden hast (Label TRASH und Datum in der Gmail-Antwort).");
     return raus.includes(id) || raus.length < KORB_MAX ? frei() : nein(n, `höchstens ${KORB_MAX} Rettungen je Lauf.`);
   }
@@ -316,7 +319,7 @@ function korbAusnahme(werkzeug, ti) {
 /** A-993b Schritt 6: mail_archivieren mit gerettet: true (Erfolg der Selbst-Rettung, EXAVA schreibt das Audit) nur für Nachrichten, die hier zurückgeholt und aus dem Posteingang
  *  genommen wurden (lease.korb_fertig, schreibt nur x-ausfuehrung.mjs) – sonst stünde im Audit eine Rettung, die es nicht gab; null = nicht betroffen. */
 const korbMeldung = (name, werkzeug, ti) => werkzeug !== "mail_archivieren" || ti?.gerettet !== true ? null
-  : leaseArt() === "belegsuche" && Array.isArray(ti.nachrichten) && ti.nachrichten.length > 0 && ti.nachrichten.every((id) => korbListe("korb_fertig").includes(id)) ? frei()
+  : KORB_ARTEN.has(leaseArt()) && Array.isArray(ti.nachrichten) && ti.nachrichten.length > 0 && ti.nachrichten.every((id) => korbListe("korb_fertig").includes(id)) ? frei()
   : nein(name, "gerettet: true nur für Nachrichten, die du in diesem Lauf mit untrash_message zurückgeholt und danach aus dem Posteingang genommen hast.");
 /** A-534: enge Ausnahmen für Kernregeln 9–11; null = Werkzeug nicht betroffen (dann gilt der Vertrag), sonst frei/nein. */
 export function hygieneAusnahme(server, werkzeug, ti) {
