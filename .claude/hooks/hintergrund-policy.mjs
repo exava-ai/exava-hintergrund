@@ -8,6 +8,9 @@
 //   weil die Shell im Netz „Trusted“ sonst ein Weg nach draußen und an .claude/ vorbei wäre;
 //   A-534 (Kernregeln 9–11): Ablage (Drive am Ort umbenennen – A-924: nie verschieben, nie kopieren –, Ordner anlegen) und Postfach-Hygiene (Spam aufheben, INBOX entfernen) nur mit einer Lease der passenden Auftragsart
 //   aus .exava/lease.json (schreibt nur x-ausfuehrung.mjs) und nur in engster Form (hygieneAusnahme); Löschen, Papierkorb, Teilen und Senden bleiben gesperrt;
+//   A-993b Schritt 6 (Bauherr 06.11.2026): im Auftrag belegsuche Gmail nur über den Claude-Connector – untrash_message (nur messageId) für eine von EXAVA freigegebene Nachricht
+//   (lease.korb_frei aus mail_archivieren ohne konto, mit Frist), die x-ausfuehrung.mjs mit Label TRASH und Datum ≤ 14 Tage gesehen hat (lease.korb_gesehen), höchstens KORB_MAX je Lauf;
+//   danach nur INBOX entfernen für eine so zurückgeholte Nachricht (lease.korb_raus); mail_archivieren mit gerettet: true nur für Nachrichten aus lease.korb_fertig (korbAusnahme, korbMeldung);
 //   A-532/A-914: Helfer (Agent, früher Task) nur mit subagent_type x-scan oder x-triage; im Helfer nur Read, ToolSearch und Lesewerkzeuge von Drive und Gmail (ingest_document nur x-scan), sonst kein Subagent;
 //   und im Netz „Trusted“ wäre sie ein Weg nach draußen und an .claude/ vorbei;
 //   A-901 (Bauherr 02.11.2026): dazu im Helfer genau ingest_document von „EXAVA Hintergrund“ (scanIngest) – die Lease setzt dieser Hook per updatedInput aus .exava/lease.json, der Helfer bekommt sie nie;
@@ -289,8 +292,35 @@ export const ANHANG_MIME = { pdf: "application/pdf", doc: "application/msword", 
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", odt: "application/vnd.oasis.opendocument.text", ods: "application/vnd.oasis.opendocument.spreadsheet", rtf: "application/rtf",
   jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic" }; // A-655: Beleg-Fotos und Scans (nie .ics/.vcf)
 const anhangEndung = (b) => /^@arbeit\/[A-Za-z0-9._-]{1,140}(?:__#[0-9a-f]{8})?\.(pdf|docx?|xlsx?|csv|odt|ods|rtf|jpe?g|png|webp|heic)$/.exec(String(b))?.[1];
+/** A-993b Schritt 6: Rettungen je Lauf – wortgleich KORB_MAX in lib/x/connector/lesen-mail.ts und x-ausfuehrung.mjs (scripts/test/a531-hook-audit-2.ts prüft die Gleichheit). */
+export const KORB_MAX = 10;
+/** A-993b Schritt 6: Gmail-Werkzeuge der Selbst-Rettung und Gmail-Nachrichten-ID (Hex wie GMAIL_ID in lib/x/connector/lesen-mail.ts). */
+export const KORB_GMAIL = new Set(["untrash_message", "unlabel_message", "update_message_labels"]);
+const GMAIL_NR = (x) => typeof x === "string" && /^[0-9a-f]{10,24}$/i.test(x);
+const korbListe = (k) => { const l = leaseRoh()?.[k]; return Array.isArray(l) ? l : []; };
+/** A-993b Schritt 6 (Bauherr 06.11.2026): Beleg aus dem Gmail-Papierkorb ins Archiv, wenn Gmail nur über den Claude-Connector angebunden ist – nur im Auftrag belegsuche.
+ *  untrash_message: nur messageId, von EXAVA freigegeben (lease.korb_frei, Frist), mit TRASH und Datum ≤ 14 Tage gesehen (lease.korb_gesehen), höchstens KORB_MAX je Lauf (lease.korb_raus);
+ *  danach unlabel_message bzw. update_message_labels nur mit genau INBOX zum Entfernen für eine hier zurückgeholte Nachricht. Nie trash, nie andere Labels, nie Labels anlegen. */
+function korbAusnahme(werkzeug, ti) {
+  const n = `gmail/${werkzeug}`, id = ti?.messageId, raus = korbListe("korb_raus");
+  if (leaseArt() !== "belegsuche") return nein(n, "nur im Auftrag „belegsuche“ (Lease aus arbeit_holen) für eine von EXAVA freigegebene Nachricht.");
+  if (werkzeug === "untrash_message") {
+    if (!NUR(ti, ["messageId"]) || !GMAIL_NR(id)) return nein(n, "nur messageId (Gmail-Nachrichten-ID).");
+    if (!korbListe("korb_frei").some((x) => x?.id === id && Date.parse(String(x?.bis)) > Date.now())) return nein(n, "nur eine von EXAVA freigegebene Nachricht – erst mail_archivieren ohne konto mit ordner papierkorb, aktion archiv und umsatz_id (Antwort selbst_retten).");
+    if (!korbListe("korb_gesehen").includes(id)) return nein(n, "nur eine Nachricht, die du mit includeTrash im Papierkorb der letzten 14 Tage gefunden hast (Label TRASH und Datum in der Gmail-Antwort).");
+    return raus.includes(id) || raus.length < KORB_MAX ? frei() : nein(n, `höchstens ${KORB_MAX} Rettungen je Lauf.`);
+  }
+  const ok = (werkzeug === "unlabel_message" ? NUR(ti, ["messageId", "labelIds"]) && INBOX(ti.labelIds) : NUR(ti, ["messageId", "removeLabelIds"]) && INBOX(ti.removeLabelIds)) && raus.includes(id);
+  return ok ? frei() : nein(n, "nur INBOX entfernen (labelIds bzw. removeLabelIds genau [\"INBOX\"]) und nur für eine Nachricht, die du in diesem Lauf mit untrash_message zurückgeholt hast.");
+}
+/** A-993b Schritt 6: mail_archivieren mit gerettet: true (Erfolg der Selbst-Rettung, EXAVA schreibt das Audit) nur für Nachrichten, die hier zurückgeholt und aus dem Posteingang
+ *  genommen wurden (lease.korb_fertig, schreibt nur x-ausfuehrung.mjs) – sonst stünde im Audit eine Rettung, die es nicht gab; null = nicht betroffen. */
+const korbMeldung = (name, werkzeug, ti) => werkzeug !== "mail_archivieren" || ti?.gerettet !== true ? null
+  : leaseArt() === "belegsuche" && Array.isArray(ti.nachrichten) && ti.nachrichten.length > 0 && ti.nachrichten.every((id) => korbListe("korb_fertig").includes(id)) ? frei()
+  : nein(name, "gerettet: true nur für Nachrichten, die du in diesem Lauf mit untrash_message zurückgeholt und danach aus dem Posteingang genommen hast.");
 /** A-534: enge Ausnahmen für Kernregeln 9–11; null = Werkzeug nicht betroffen (dann gilt der Vertrag), sonst frei/nein. */
 export function hygieneAusnahme(server, werkzeug, ti) {
+  if (server === "gmail" && KORB_GMAIL.has(werkzeug) && (werkzeug === "untrash_message" || leaseArt() === "belegsuche")) return korbAusnahme(werkzeug, ti); // A-993b Schritt 6
   const art = { gmail: ["unmark_message_spam", "unmark_thread_spam", "unlabel_message", "unlabel_thread", "update_message_labels"], google_drive: ["update_file", "create_file"] }[server]?.includes(werkzeug) // A-924: copy_file gesperrt (nie eine zweite Kopie)
     ? (server === "gmail" ? "postfach_hygiene" : "ablage") : null;
   if (!art) return null;
@@ -418,7 +448,7 @@ export function entscheide(roh, { vertrag } = {}) {
   if (scan && eingabe.agent_type === SCAN_AGENT && teile.server === EXAVA_SERVER && teile.werkzeug === SCAN_EXAVA) return scanIngest(name, eingabe.tool_input, eingabe.agent_id); // A-901: genau dieses EXAVA-Werkzeug, Lease vom Hook
   if (scan && eingabe.agent_type === DRIVE_AGENT && teile.server === EXAVA_SERVER) return driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id); // A-930
   if (scan && (teile.server === EXAVA_SERVER || teile.server.startsWith("exava") || gesteuert(teile))) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} von „EXAVA Hintergrund“, keine anderen EXAVA- und keine Schreibwerkzeuge.`);
-  if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
+  if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
   if (gesteuert(teile) && !EXAVA_WERKZEUGE.has(teile.werkzeug) && !EXAVA_BEKANNT.has(teile.werkzeug)) return frei(); // A-531 AUSFUEHRUNG: Entscheidung bei x-ausfuehrung.mjs (Lease + Freigabe)
   if (teile.server === "exava") return nein(name, "die normale Verbindung „EXAVA“ ist in der Hintergrundarbeit gesperrt; EXAVA-Werkzeuge nur vom Connector „EXAVA Hintergrund“.");
   let server = teile.server, v;
@@ -429,7 +459,7 @@ export function entscheide(roh, { vertrag } = {}) {
     // EXAVA erzwingt Profil, Lease und Rechte serverseitig (dieser Hook ist dort die zweite Schicht). Jedes andere EXAVA-Werkzeug per UUID bleibt gesperrt.
     if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA && eingabe.agent_type === SCAN_AGENT ? scanIngest(name, eingabe.tool_input, eingabe.agent_id) // A-901: wie EXAVA_WERKZEUGE per UUID
       : eingabe.agent_type === DRIVE_AGENT && Object.hasOwn(DRIVE_EXAVA, teile.werkzeug) ? driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-930
-    if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return startAdresse(name, teile.werkzeug, eingabe.tool_input);
+    if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length === 0) return fremdLesend(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length !== 1) return nein(name, "capability_missing: Connector mit UUID-Namen, Werkzeug mehrdeutig, gesperrt bis geprüft.");
     server = treffer[0];

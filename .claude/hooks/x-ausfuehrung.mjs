@@ -21,6 +21,8 @@
 //            A-846 (E-1143): ebenso in den Entwurfsaufträgen SPIEGEL_ARTEN (Original für den Anhang eines Entwurfs, EXAVA-Storage) – prepare_file_upload purpose dokument_original
 //            merkt URL und Prüfsumme in lease.spiegel; die Policy lässt curl PUT dorthin nur für genau dieses gemerkte Original zu.
 //            A-657/A-658: arbeit_holen eines Belegsuche-Auftrags mit job.bezug.csv → lease.csv (die Policy lässt dann Write und Upload der CSV zu).
+//            A-993b Schritt 6 (nur Auftrag belegsuche): mail_archivieren mit selbst_retten → lease.korb_frei (IDs mit Frist, von EXAVA); Gmail search_threads/get_thread/get_message →
+//            Nachrichten mit Label TRASH und Datum ≤ KORB_TAGE Tage → lease.korb_gesehen; untrash_message einer freigegebenen ID → lease.korb_raus; danach INBOX entfernt → lease.korb_fertig.
 //            A-642: Ist das Ergebnis größer als MAX_MCP_OUTPUT_TOKENS, liest der Hook die von Claude Code gespeicherte Ausgabe (<session_id>/tool-results/, gespeicherteAusgabe).
 //            A-626 WEB (nur Aufträge aus WEB_ARTEN, A-782): arbeit_holen → lease.web = Web-Adressen aus dem Auftragstext (job.eingabe ohne angehängten Gesprächsverlauf); WebSearch → Adressen der Treffer
 //            (url mit title, nie der Suchtext); WebFetch → der Hook lädt dieselbe Seite selbst (GET, nur HTML, ≤ 4 MiB) und merkt Zieladresse und Links (href) – nie Text aus der
@@ -260,6 +262,49 @@ function ausfuehrungMerken(eingabe, env) {
   const alt = umbenennenAus(l.umbenennen).filter((x) => !um.some((y) => y.file_id === x.file_id)), waAlt = (Array.isArray(l.whatsapp_ids) ? l.whatsapp_ids : []).filter((x) => typeof x === "string" && !wa.includes(x));
   leaseSchreiben(env, JSON.stringify({ ...l, umbenennen: [...alt, ...um].slice(-300), whatsapp_ids: [...waAlt, ...wa].slice(-150) }));
 }
+/** A-993b Schritt 6: Papierkorb der letzten KORB_TAGE Tage, höchstens KORB_MAX Rettungen je Lauf – wortgleich lib/postfach/einreihen.ts KORB_TAGE, KORB_MAX in hintergrund-policy.mjs. */
+export const KORB_TAGE = 14, KORB_MAX = 10;
+const GMAIL_NR = /^[0-9a-f]{10,24}$/i;
+const korbFehler = (eingabe) => alleObjekte(eingabe.tool_response).some((x) => x.isError === true || x.is_error === true);
+/** A-993b Schritt 6: Lease des Auftrags belegsuche (für die Felder korb_*) – sonst null. */
+const korbLease = (env) => { let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return null; } return l && l.art === "belegsuche" && leaseLesen(env) ? l : null; };
+const korbIds = (l, k) => (Array.isArray(l?.[k]) ? l[k].filter((x) => typeof x === "string") : []);
+/** A-993b Schritt 6: Freigabe von EXAVA (mail_archivieren ohne konto → selbst_retten { ids, bis }) für genau diesen Auftrag → lease.korb_frei; Frist höchstens 60 Minuten. */
+function korbFreigabeMerken(eingabe, env) {
+  const l = korbLease(env), lease = leaseLesen(env);
+  if (!l || korbFehler(eingabe) || String(eingabe.tool_input?.job_id ?? "").toLowerCase() !== String(lease?.job_id ?? "").toLowerCase()) return;
+  const s = antwortObjekte(eingabe.tool_response).map((x) => x?.selbst_retten).find((x) => x && Array.isArray(x.ids)), bis = Date.parse(String(s?.bis ?? ""));
+  if (!s || !Number.isFinite(bis)) return;
+  const neu = s.ids.filter((id) => typeof id === "string" && GMAIL_NR.test(id)).slice(0, KORB_MAX).map((id) => ({ id, bis: new Date(Math.min(bis, Date.now() + 3_600_000)).toISOString() }));
+  if (!neu.length) return;
+  const alt = (Array.isArray(l.korb_frei) ? l.korb_frei : []).filter((x) => x && typeof x.id === "string" && !neu.some((y) => y.id === x.id));
+  leaseSchreiben(env, JSON.stringify({ ...l, korb_frei: [...alt, ...neu].slice(-2 * KORB_MAX) }));
+}
+/** Zeitpunkt einer Gmail-Nachricht (internalDate in ms oder date als Text); unlesbar → -Infinity (nie im Fenster). */
+const korbZeit = (m) => { const d = m.internalDate ?? m.internal_date ?? m.date; const z = typeof d === "number" || /^\d{12,14}$/.test(String(d ?? "")) ? Number(d) : Date.parse(String(d ?? "")); return Number.isFinite(z) ? z : -Infinity; };
+/** A-993b Schritt 6: Nachrichten einer Gmail-Antwort nur in ihren festen Formen – die Nachricht selbst (get_message), messages (get_thread), threads[].messages (search_threads);
+ *  JSON nur aus der MCP-Hülle (antwortObjekte), nie aus Feldern der Mail wie Text, Vorschau oder Anhang – so schleust kein Mailinhalt eine „gesehene“ Nachricht ein. */
+const korbNachrichten = (r) => antwortObjekte(r).flatMap((o) => [o, ...(Array.isArray(o.messages) ? o.messages : []), ...(Array.isArray(o.threads) ? o.threads.flatMap((t) => (Array.isArray(t?.messages) ? t.messages : [])) : [])])
+  .filter((m) => m && typeof m === "object");
+/** A-993b Schritt 6: Gmail-Antworten im Auftrag belegsuche – Nachrichten mit Label TRASH und Datum in den letzten KORB_TAGE Tagen → lease.korb_gesehen (höchstens 200). */
+function korbGesehenMerken(eingabe, env) {
+  const l = korbLease(env); if (!l || korbFehler(eingabe)) return;
+  const jetzt = Date.now(), grenze = jetzt - KORB_TAGE * 86_400_000;
+  const ids = korbNachrichten(eingabe.tool_response).filter((m) => typeof m.id === "string" && GMAIL_NR.test(m.id) && [m.labelIds, m.label_ids].some((x) => Array.isArray(x) && x.includes("TRASH"))
+    && korbZeit(m) >= grenze && korbZeit(m) <= jetzt + 86_400_000).map((m) => m.id);
+  if (!ids.length) return;
+  const neu = [...new Set(ids)], alt = korbIds(l, "korb_gesehen").filter((x) => !neu.includes(x));
+  leaseSchreiben(env, JSON.stringify({ ...l, korb_gesehen: [...alt, ...neu].slice(-200) }));
+}
+/** A-993b Schritt 6: ausgeführte Rettungsschritte – untrash_message einer freigegebenen ID → lease.korb_raus; danach INBOX entfernt (unlabel_message bzw. update_message_labels mit
+ *  genau INBOX) für eine zurückgeholte ID → lease.korb_fertig (nur dafür lässt die Policy gerettet: true an EXAVA zu). Fehlerantwort → nichts. */
+function korbSchrittMerken(eingabe, env, werkzeug) {
+  const l = korbLease(env), id = eingabe.tool_input?.messageId; if (!l || typeof id !== "string" || korbFehler(eingabe)) return;
+  const inbox = (x) => Array.isArray(x) && x.length === 1 && x[0] === "INBOX", raus = korbIds(l, "korb_raus"), fertig = korbIds(l, "korb_fertig");
+  if (werkzeug === "untrash_message") { if (raus.includes(id) || !(Array.isArray(l.korb_frei) && l.korb_frei.some((x) => x?.id === id))) return; leaseSchreiben(env, JSON.stringify({ ...l, korb_raus: [...raus, id].slice(-2 * KORB_MAX) })); return; }
+  if (!raus.includes(id) || fertig.includes(id) || !(inbox(eingabe.tool_input?.labelIds) || inbox(eingabe.tool_input?.removeLabelIds))) return;
+  leaseSchreiben(env, JSON.stringify({ ...l, korb_fertig: [...fertig, id].slice(-2 * KORB_MAX) }));
+}
 /** A-534 (G7): Postfächer des Kunden aus job.bezug.verbindungen (von EXAVA, nie vom Modell) – kleingeschrieben, nur mit @, höchstens 20. */
 const adressen = (job) => (Array.isArray(job?.bezug?.verbindungen) ? job.bezug.verbindungen : []).map((v) => v?.adresse).filter((a) => typeof a === "string" && a.includes("@")).map((a) => a.toLowerCase()).slice(0, 20);
 /** Alle Objekte einer Antwort, rekursiv. JSON in Texten nur aus der MCP-Hülle (text/content/result/structuredContent), nie aus Datenfeldern
@@ -480,6 +525,9 @@ export async function nachher(eingabe, { env = process.env, f = fetch } = {}) {
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "browser_lesen" || t.werkzeug === "browser_beenden")) { uploadHostMerken(eingabe, env); return { code: 0 }; } // A-882: download_url der Eingangsbestätigung (Speicher-Host wie exava_datei_lesen)
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "prepare_file_upload" || t.werkzeug === "exava_datei_lesen")) { mitLeaseSperre(env, () => { uploadHostMerken(eingabe, env); if (t.werkzeug === "exava_datei_lesen") anhangMerken(eingabe, env); }); return { code: 0 }; } // A-818: Prüfsummen der geladenen Dateien; A-930: parallel sicher
   if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_message" && eingabe.tool_input?.messageFormat === "RAW") { originalMerken(eingabe, env, "gmail"); return { code: 0 }; } // A-608 BELEG-ORIGINAL (Gmail-Anhang)
+  if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "mail_archivieren") { mitLeaseSperre(env, () => korbFreigabeMerken(eingabe, env)); return { code: 0 }; } // A-993b Schritt 6
+  if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && ["untrash_message", "unlabel_message", "update_message_labels"].includes(t.werkzeug)) { mitLeaseSperre(env, () => korbSchrittMerken(eingabe, env, t.werkzeug)); return { code: 0 }; } // A-993b Schritt 6
+  if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && ["search_threads", "get_thread", "get_message"].includes(t.werkzeug) && korbLease(env)) mitLeaseSperre(env, () => korbGesehenMerken(eingabe, env)); // A-993b Schritt 6 (Sperre nur im Auftrag belegsuche)
   if (t && t.server === "gmail" && t.werkzeug === "get_thread") { await threadMelden(eingabe, env, f); return { code: 0 }; }
   if (!gesteuert(t)) return { code: 0 };
   const toolUseId = String(eingabe.tool_use_id ?? ""); const pfad = vermerkPfad(env, toolUseId);
