@@ -16,7 +16,7 @@
 //   und im Netz „Trusted“ wäre sie ein Weg nach draußen und an .claude/ vorbei;
 //   A-901 (Bauherr 02.11.2026): dazu im Helfer genau ingest_document von „EXAVA Hintergrund“ (scanIngest) – die Lease setzt dieser Hook per updatedInput aus .exava/lease.json, der Helfer bekommt sie nie;
 //   A-901 Teil 2: den Helfer nur im Vordergrund (run_in_background: false) und nur mit subagent_type, prompt, description starten (SCAN_AGENT_FELDER); sein erster Aufruf bindet
-//   ihn an den laufenden Auftrag (.exava/helfer-<sha256>.json, einzige Datei, die dieser Hook schreibt) – nach einem Auftragswechsel keine Lease mehr für ihn;
+//   ihn an den laufenden Auftrag (.exava/helfer-<sha256>.json; außerdem schreibt dieser Hook nur .exava/verbrauch.json, A-1007 H) – nach einem Auftragswechsel keine Lease mehr für ihn;
 //   A-930 (Weg A): dritter Helfer x-drive-batch (Ausführungsauftrag bezug.nur_ausfuehren) – im Helfer EXAVA nur ausfuehrung_liste, exava_datei_lesen und heartbeat_job (Lease per updatedInput
 //   wie A-901), Drive lesend plus am Ort umbenennen und WhatsApp-Upload nach hygieneAusnahme (dieselben Prüfungen wie im Hauptlauf), Bash nur curl -o von der download_url (BASH_LADEN);
 //   EXAVA nur vom Connector „EXAVA Hintergrund“ und nur die Werkzeuge in EXAVA_WERKZEUGE (der Server prüft Profil, Auftrag und Lease zusätzlich);
@@ -40,9 +40,13 @@
 //   EXAVA, fail closed); hier frei, damit genau dieser zweite Hook zuständig ist (settings.json führt beide mit Prüfsumme; fehlt er, sperrt die Integritätsprüfung).
 //   A-907 Fehler-Radar: jeder Exit 2 hängt eine kleine Zeile an arbeit/hook-blocks.jsonl (blockZeile/blockMerken: Zeit, Werkzeug, Sperrgrund, bei Bash der geschwärzte Kurzbefehl) –
 //   nur im Hook-Lauf von Claude Code (CLAUDE_PROJECT_DIR gesetzt), Fehler beim Schreiben werden ignoriert, der Block bleibt Exit 2; die Routine meldet die Zeilen mit hook_blocks.
+//   A-1007 Paket H (Bauherr 07.11.2026): complete_job von „EXAVA Hintergrund“ bekommt per updatedInput verbrauch – die Token-Ist-Werte des Claude-Abos für diesen Auftrag aus dem
+//   Sitzungsprotokoll (transcript_path der Hook-Eingabe und Helfer-Protokolle; nur Zahlen und Modell, nie Inhalte) abzüglich des zuletzt gemeldeten Stands (.exava/verbrauch.json);
+//   EXAVA bucht ihn als Abo-Verbrauch (ohne Betrag). Ein vom Modell mitgegebenes verbrauch fällt weg; ohne lesbares Protokoll, ohne Zustandsdatei oder wenn der Stand einer schon
+//   abgeschlossenen Sitzung fehlt, kein verbrauch (lieber nichts als doppelt) – complete_job läuft immer weiter, nie ein Block.
 // Rein lokal, ohne Netz, ohne Umgebungsvariable. Fail closed: unlesbare Eingabe, Vertrag nicht lesbar, Absturz und Frist → Exit 2.
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -397,6 +401,66 @@ const fremdLesend = (name, werkzeug, ti) => EXAVA_BEKANNT.has(werkzeug) || EXAVA
  *  jedes andere EXAVA-Werkzeug unverändert frei. */
 const startAdresse = (name, werkzeug, ti) => werkzeug !== "browser_starten" || (WEB_ARTEN.has(leaseArt()) && !String(ti?.url ?? "").includes("#") && (leaseWeb().includes(webAdresse(ti?.url)) || startFrei(ti?.url))) ? frei()
   : nein(name, "Startadresse nur https mit Domain (keine IP, kein interner Host, kein Port, keine Anmeldedaten), ohne #-Teil und ohne Mailadresse, IBAN oder lange Nummer (A-905) – sonst die Startseite ohne solche Teile wählen, Unterseiten per browser_handeln.");
+/** A-1007 H: Zeitbudget für das Lesen der Sitzungsprotokolle – deutlich unter FRIST_MS, damit complete_job nie an der Frist scheitert (zu spät → ohne verbrauch). */
+export const VERBRAUCH_MS = 4000;
+const VERBRAUCH_FELDER = ["input", "output", "cache_read", "cache_creation"], VERBRAUCH_MAX = 700_000_000;
+const tokenZahl = (x) => (Number.isFinite(x) && x > 0 ? Math.min(Math.floor(x), VERBRAUCH_MAX) : 0);
+/** A-1007 H: Token dieser Claude-Sitzung aus dem Sitzungsprotokoll (transcript_path der Hook-Eingabe) und den Protokollen ihrer Helfer (<sitzung>/subagents/*.jsonl, ältere Ablage
+ *  agent-*.jsonl derselben Sitzung) – je Antwort (message.id) einmal, nur Antworten mit Mengenangabe (input_tokens und output_tokens als Zahl), nur usage und Modell des
+ *  Hauptprotokolls, nie Inhalte; abschluesse = frühere complete_job-Aufrufe dieser Sitzung (ohne den laufenden, tool_use_id). Unlesbar oder über VERBRAUCH_MS → null. */
+export function sitzungsVerbrauch(e, start = Date.now()) {
+  const pfad = typeof e?.transcript_path === "string" ? e.transcript_path : "", sitzung = typeof e?.session_id === "string" ? e.session_id : "";
+  if (!pfad.endsWith(".jsonl") || !/^[A-Za-z0-9_-]{8,80}$/.test(sitzung)) return null;
+  const ordner = dirname(pfad), dateien = [pfad], laufend = typeof e?.tool_use_id === "string" ? e.tool_use_id : null;
+  try { for (const f of readdirSync(join(ordner, sitzung, "subagents"))) if (f.endsWith(".jsonl")) dateien.push(join(ordner, sitzung, "subagents", f)); } catch { /* ohne Helfer */ }
+  try { for (const f of readdirSync(ordner)) if (/^agent-[\w-]+\.jsonl$/.test(f)) dateien.push(join(ordner, f)); } catch { /* ohne ältere Ablage */ }
+  const s = { sitzung, modell: "", input: 0, output: 0, cache_read: 0, cache_creation: 0, abschluesse: 0 }, gesehen = new Set();
+  for (const [i, d] of dateien.entries()) {
+    let text; try { text = readFileSync(d, "utf8"); } catch { if (i === 0) return null; continue; }
+    if (i > 0 && dirname(d) === ordner && !text.includes(`"sessionId":"${sitzung}"`)) continue; // ältere Ablage: nur Helfer dieser Sitzung
+    for (const zeile of text.split("\n")) {
+      if (Date.now() - start > VERBRAUCH_MS) return null;
+      if (!zeile.includes('"usage"')) continue;
+      let o; try { o = JSON.parse(zeile); } catch { continue; }
+      const m = o?.type === "assistant" && o.message && typeof o.message === "object" ? o.message : null, u = m?.usage;
+      if (i === 0 && Array.isArray(m?.content)) for (const b of m.content) if (b?.type === "tool_use" && /complete_job$/.test(String(b.name ?? "")) && b.id !== laufend && !gesehen.has(`tu:${b.id}`)) { gesehen.add(`tu:${b.id}`); s.abschluesse++; }
+      if (!u || typeof u !== "object" || !Number.isFinite(u.input_tokens) || !Number.isFinite(u.output_tokens)) continue; // ohne Mengenangabe nichts zählen (nie als 0 gedeutet)
+      const id = typeof m.id === "string" && m.id ? m.id : `${i}:${o.uuid}`;
+      if (gesehen.has(id)) continue; // eine Antwort steht je Inhaltsblock mehrfach im Protokoll, mit derselben usage
+      gesehen.add(id);
+      s.input += tokenZahl(u.input_tokens); s.output += tokenZahl(u.output_tokens); s.cache_read += tokenZahl(u.cache_read_input_tokens); s.cache_creation += tokenZahl(u.cache_creation_input_tokens);
+      if (i === 0 && typeof m.model === "string" && /^[\w.:/-]{1,80}$/.test(m.model)) s.modell = m.model;
+    }
+  }
+  return s;
+}
+/** A-1007 H: Verbrauch des laufenden Auftrags = Sitzungsstand minus zuletzt gemeldeter Stand (.exava/verbrauch.json, nur dieser Hook schreibt sie); je Auftrag und Lease-Generation genau
+ *  einmal festgelegt – eine Wiederholung von complete_job meldet dieselben Zahlen (EXAVA bucht je Auftrag und Generation einmal). Ohne .exava, ohne Protokoll, ohne Modellangabe
+ *  oder ohne Stand einer Sitzung, die schon abgeschlossen hat (Rückfall nach verlorenem Zustand) → null (lieber nichts als doppelt). */
+export function auftragsVerbrauch(e, ti) {
+  const job = String(ti?.job_id ?? "").toLowerCase(), gen = ti?.lease_generation, dir = join(projektDir(), ".exava");
+  if (!UUID_LEASE.test(job) || !Number.isInteger(gen) || gen < 1 || !existsSync(dir)) return null;
+  const s = sitzungsVerbrauch(e); if (!s || !s.modell) return null;
+  const pfad = join(dir, "verbrauch.json"), schluessel = `${job}:${gen}`, form = (x) => ({ modell: String(x.modell).slice(0, 80), ...Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, tokenZahl(x[f])])) });
+  let st = null; try { st = JSON.parse(readFileSync(pfad, "utf8")); } catch { /* erster Auftrag dieser Sitzung */ }
+  const gueltig = st && typeof st === "object" && st.sitzung === s.sitzung && st.auftraege && typeof st.auftraege === "object";
+  if (!gueltig && s.abschluesse > 0) return null; // Stand fehlt, aber diese Sitzung hat schon abgeschlossen: das Delta wäre doppelt
+  if (!gueltig) st = { sitzung: s.sitzung, stand: {}, auftraege: {} };
+  const alt = st.auftraege[schluessel];
+  if (alt && typeof alt === "object" && typeof alt.modell === "string" && alt.modell) return form(alt);
+  const v = form({ modell: s.modell, ...Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, s[f] - (Number(st.stand?.[f]) || 0)])) });
+  const neu = { sitzung: s.sitzung, stand: Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, s[f]])), auftraege: Object.fromEntries([...Object.entries(st.auftraege).slice(-49), [schluessel, v]]) };
+  try { if (lstatSync(dir).isSymbolicLink()) return null; const t = `${pfad}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify(neu)); renameSync(t, pfad); } catch { return null; }
+  return v;
+}
+/** A-1007 H: complete_job – verbrauch des Auftrags per updatedInput; ein vom Modell mitgegebener fällt weg (nur der Hook meldet ihn). Weder ermittelt noch mitgegeben → null (wie bisher frei). */
+export function verbrauchMelden(werkzeug, ti, e) {
+  if (werkzeug !== "complete_job" || !ti || typeof ti !== "object" || Array.isArray(ti)) return null;
+  const { verbrauch: mitgegeben, ...ohne } = ti, v = auftragsVerbrauch(e, ti);
+  if (!v && mitgegeben === undefined) return null;
+  return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "A-1007 H Abo-Verbrauch aus dem Sitzungsprotokoll",
+    updatedInput: v ? { ...ohne, verbrauch: v } : ohne } }) };
+}
 /** A-901 Lease-Weitergabe: ingest_document aus dem Helfer x-scan nur mit vollständiger Lease des laufenden Auftrags (.exava/lease.json, schreibt nur x-ausfuehrung.mjs nach arbeit_holen)
  *  und nur mit den Feldern des Werkzeugs; job_id, lauf_id, lease_generation und lease_token setzt der Hook per updatedInput (Werte des Helfers werden ersetzt). Profil, Auftrag,
  *  Lease und Quelle prüft der Server (hintergrundBindung, brain_lease_pruefen). Ohne gültige Lease gesperrt (fail closed). */
@@ -451,7 +515,7 @@ export function entscheide(roh, { vertrag } = {}) {
   if (scan && eingabe.agent_type === SCAN_AGENT && teile.server === EXAVA_SERVER && teile.werkzeug === SCAN_EXAVA) return scanIngest(name, eingabe.tool_input, eingabe.agent_id); // A-901: genau dieses EXAVA-Werkzeug, Lease vom Hook
   if (scan && eingabe.agent_type === DRIVE_AGENT && teile.server === EXAVA_SERVER) return driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id); // A-930
   if (scan && (teile.server === EXAVA_SERVER || teile.server.startsWith("exava") || gesteuert(teile))) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} von „EXAVA Hintergrund“, keine anderen EXAVA- und keine Schreibwerkzeuge.`);
-  if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
+  if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
   if (gesteuert(teile) && !EXAVA_WERKZEUGE.has(teile.werkzeug) && !EXAVA_BEKANNT.has(teile.werkzeug)) return frei(); // A-531 AUSFUEHRUNG: Entscheidung bei x-ausfuehrung.mjs (Lease + Freigabe)
   if (teile.server === "exava") return nein(name, "die normale Verbindung „EXAVA“ ist in der Hintergrundarbeit gesperrt; EXAVA-Werkzeuge nur vom Connector „EXAVA Hintergrund“.");
   let server = teile.server, v;
@@ -462,7 +526,7 @@ export function entscheide(roh, { vertrag } = {}) {
     // EXAVA erzwingt Profil, Lease und Rechte serverseitig (dieser Hook ist dort die zweite Schicht). Jedes andere EXAVA-Werkzeug per UUID bleibt gesperrt.
     if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA && eingabe.agent_type === SCAN_AGENT ? scanIngest(name, eingabe.tool_input, eingabe.agent_id) // A-901: wie EXAVA_WERKZEUGE per UUID
       : eingabe.agent_type === DRIVE_AGENT && Object.hasOwn(DRIVE_EXAVA, teile.werkzeug) ? driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-930
-    if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input);
+    if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length === 0) return fremdLesend(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length !== 1) return nein(name, "capability_missing: Connector mit UUID-Namen, Werkzeug mehrdeutig, gesperrt bis geprüft.");
     server = treffer[0];
