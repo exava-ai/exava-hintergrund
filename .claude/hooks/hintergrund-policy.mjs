@@ -221,6 +221,17 @@ export const UMBENENNEN_ARTEN = new Set(["ablage", "sync_aktuell", "sync_histori
 export function leaseUmbenennen() { const u = UMBENENNEN_ARTEN.has(leaseArt()) ? leaseRoh()?.umbenennen : null; return Array.isArray(u) ? u.filter((x) => x && typeof x.file_id === "string" && typeof x.titel === "string") : []; }
 /** A-924 AM ORT: eigene, nicht geteilte Dateien (get_file_permissions: nur Eigentümer-Rechte eines verbundenen Postfachs, x-ausfuehrung.mjs); sonst leer. */
 export function leaseUngeteilt() { const o = leaseRoh()?.ungeteilt; return Array.isArray(o) ? o.filter((x) => typeof x === "string") : []; }
+/** A-1050 EINGANG: vom PostToolUse-Hook bestätigte Listen der Aufträge mit Umbenennen (eingang_dateien = Dateien im bestätigten Ordner 00-EXAVA/Eingang, umbenannt = in diesem Lauf
+ *  auf den Namen aus EXAVA umbenannt bzw. schon so benannt); sonst leer. */
+const leaseListe = (k) => { const o = UMBENENNEN_ARTEN.has(leaseArt()) ? leaseRoh()?.[k] : null; return Array.isArray(o) ? o.filter((x) => typeof x === "string") : []; };
+/** A-1050 EINGANG (Bauherr 11.11.2026, T3: „Verschieben im Kunden-Drive (00-EXAVA/Eingang → nach Umbenennung direkt ins Archiv, Dubletten nach Archiv/_Dubletten, niemals löschen)“):
+ *  genau diese eine Verschiebung – nur fileId und parentId (der Connector ersetzt den Elternordner, dieselbe Datei-ID, keine Kopie), Quelle eine Datei aus der Liste des bestätigten
+ *  Ordners 00-EXAVA/Eingang, Ziel nur der bestätigte Ordner 00-EXAVA/Archiv bzw. Archiv/_Dubletten (beide wie der Eingang im selben Elternordner, soweit Drive ihn nennt), nur eine eigene,
+ *  nicht geteilte Datei, die in diesem Lauf auf den Namen aus EXAVA heißt (Erfassung mit Dokument-ID und Prüfsumme bestätigt). Nie kopieren, nie löschen, nie ein anderes Ziel. */
+export const eingangVerschieben = (ti) => { const l = leaseRoh() ?? {};
+  return NUR(ti, ["fileId", "parentId"]) && ID(ti.fileId) && ID(ti.parentId) && typeof l.eingang === "string" && ti.parentId !== l.eingang
+    && [l.archiv, l.dubletten].some((z) => typeof z === "string" && z === ti.parentId) && (typeof l.eingang_in !== "string" || typeof l.archiv_in !== "string" || l.eingang_in === l.archiv_in)
+    && leaseListe("eingang_dateien").includes(ti.fileId) && leaseListe("umbenannt").includes(ti.fileId) && leaseUngeteilt().includes(ti.fileId); };
 /** A-531 COMPLIANCE H2: Hosts der Upload-URLs, die x-ausfuehrung.mjs (PostToolUse) aus der Antwort von prepare_file_upload in die Lease schreibt; sonst leer. */
 export function leaseUploadHosts() { const h = leaseRoh()?.upload_hosts; return Array.isArray(h) ? h.filter((x) => typeof x === "string") : []; }
 /** A-608 BELEG-ORIGINAL: von x-ausfuehrung.mjs gemerkte Originale { datei, sha256 }; sonst leer. */
@@ -291,7 +302,7 @@ export const schemaName = (n, endung) => { const s = String(n ?? ""), m = SCHEMA
 export const UMBENENNEN_ENDUNGEN = ["pdf", "doc", "docx", "xls", "xlsx", "csv", "odt", "ods", "rtf", "jpg", "jpeg", "png", "webp", "heic", "tif", "tiff"];
 export const inPlaceName = (n) => { const m = SCHEMA_NAME_RE.exec(String(n ?? "")); return !!m && UMBENENNEN_ENDUNGEN.includes(m[1].toLowerCase()) && schemaName(n, m[1]); };
 /** A-531 HOOK-AUDIT O1: Ordner, die die Ablage anlegen darf (Eingang wie bisher; Archiv nur in einem bestätigten eigenen Ordner). */
-export const ABLAGE_ORDNER = ["Eingang", "Archiv", "WhatsApp"]; // A-924 Erweiterung: 00-EXAVA/WhatsApp für WhatsApp-Dokumente
+export const ABLAGE_ORDNER = ["Eingang", "Archiv", "WhatsApp", "_Dubletten"]; // A-924 Erweiterung: 00-EXAVA/WhatsApp für WhatsApp-Dokumente; A-1050: Archiv/_Dubletten (nur im bestätigten Archiv)
 /** A-642 OFFICE: Endung → MIME eines Mail-Anhangs für den Upload-Platzhalter (wie ANHANG_MIME in x-ausfuehrung.mjs, dort mit Magic Bytes); keine Makro-Formate. */
 export const ANHANG_MIME = { pdf: "application/pdf", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xls: "application/vnd.ms-excel",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", odt: "application/vnd.oasis.opendocument.text", ods: "application/vnd.oasis.opendocument.spreadsheet", rtf: "application/rtf",
@@ -332,13 +343,15 @@ export function hygieneAusnahme(server, werkzeug, ti) {
     ? (server === "gmail" ? "postfach_hygiene" : "ablage") : null;
   if (!art) return null;
   const n = `${server}/${werkzeug}`;
-  const arten = werkzeug === "update_file" ? [...UMBENENNEN_ARTEN] : [art]; // A-924 Erweiterung: am Ort umbenennen auch im Drive-Fenster (lesen und benennen in einem Schritt)
+  const dub = werkzeug === "create_file" && ti?.base64Content === undefined && (ti?.title ?? ti?.name) === "_Dubletten"; // A-1050: Ordner der Dubletten im Archiv auch im Drive-Fenster
+  const arten = werkzeug === "update_file" || dub ? [...UMBENENNEN_ARTEN] : [art]; // A-924 Erweiterung: am Ort umbenennen auch im Drive-Fenster (lesen und benennen in einem Schritt)
   if (!arten.includes(leaseArt())) return nein(n, `nur in einem Auftrag „${arten.join("“ oder „")}“ (Lease aus arbeit_holen).`);
   const ok = werkzeug === "unmark_message_spam" ? NUR(ti, ["messageId"]) && ID(ti.messageId)
     : werkzeug === "unmark_thread_spam" ? NUR(ti, ["threadId"]) && ID(ti.threadId)
     : werkzeug === "unlabel_message" ? NUR(ti, ["messageId", "labelIds"]) && ID(ti.messageId) && INBOX(ti.labelIds)
     : werkzeug === "unlabel_thread" ? NUR(ti, ["threadId", "labelIds"]) && ID(ti.threadId) && INBOX(ti.labelIds)
     : werkzeug === "update_message_labels" ? NUR(ti, ["messageId", "removeLabelIds"]) && ID(ti.messageId) && INBOX(ti.removeLabelIds)
+    : werkzeug === "update_file" && ti?.parentId !== undefined ? eingangVerschieben(ti) // A-1050 EINGANG: genau die eine Verschiebung 00-EXAVA/Eingang → Archiv bzw. Archiv/_Dubletten
     : werkzeug === "update_file" ? NUR(ti, ["fileId", "name", "title"]) && ID(ti.fileId) && (ti.name === undefined) !== (ti.title === undefined) // A-924 AM ORT: nur umbenennen, kein Elternordner (nie verschieben); A-659 title wie name
       && inPlaceName(ti.title ?? ti.name) && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name)) // nur genau der Name, den EXAVA geplant hat (job.bezug.umbenennen)
       && leaseUngeteilt().includes(ti.fileId) // G7: nur eine eigene, nicht geteilte Datei (get_file_permissions)
@@ -351,10 +364,12 @@ export function hygieneAusnahme(server, werkzeug, ti) {
     : NUR(ti, ["name", "title", "mimeType", "parents", "parentId"]) && (ti.name === undefined) !== (ti.title === undefined) && ti.mimeType === "application/vnd.google-apps.folder" // A-930 Nachtrag: Ordnername als title (Feld des Connectors wie beim Hochladen) oder name, genau eins
       && (ABLAGE_ORDNER.includes(ti.title ?? ti.name) || !!leaseDatev()?.ordner.includes(ti.title ?? ti.name)) // A-818: die drei Ordner des DATEV-Pakets
       && (ti.parentId === undefined || ID(ti.parentId)) && (ti.parents === undefined || (Array.isArray(ti.parents) && ti.parents.length === 1 && ID(ti.parents[0])))
-      && [ti.parentId, ti.parents?.[0]].every((x) => x === undefined || leaseOrdner().includes(x)) // HOOK-AUDIT F3 (G7): Elternordner nur ein bestätigter eigener Ordner
+      && [ti.parentId, ti.parents?.[0]].every((x) => x === undefined || leaseOrdner().includes(x) || (dub && x === leaseRoh()?.archiv)) // HOOK-AUDIT F3 (G7): Elternordner nur ein bestätigter eigener Ordner
+      && (!dub || (typeof leaseRoh()?.archiv === "string" && ti.parentId === leaseRoh().archiv && ti.parents === undefined)) // A-1050: _Dubletten nur direkt im bestätigten Archiv
       && ((ti.title ?? ti.name) === "Eingang" || ti.parentId !== undefined || ti.parents !== undefined); // O1: Archiv nie ohne Elternordner
   const upload = werkzeug === "create_file" && ti.base64Content !== undefined && !/\.zip$/i.test(String(ti.base64Content)); // A-930d: genauer Grund statt der Sammelmeldung (Diagnose im Lauf)
-  const grund = ok ? null : werkzeug === "update_file" && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name))
+  const grund = ok ? null : werkzeug === "update_file" && ti?.parentId !== undefined ? "Verschieben nur aus 00-EXAVA/Eingang nach 00-EXAVA/Archiv bzw. Archiv/_Dubletten (Ordner per get_file_permissions und get_file_metadata bestätigt, Datei aus der Liste parentId = '<Eingang>'), nur fileId und parentId, erst nach der Umbenennung auf den Namen aus EXAVA – nie kopieren, nie löschen"
+    : werkzeug === "update_file" && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name))
       ? (leaseUngeteilt().includes(ti.fileId) ? null : "Datei nicht als eigen und ungeteilt bestätigt – erst get_file_permissions; zeigt die Antwort eine Freigabe oder einen fremden Eigentümer: nicht umbenennen, Grund melden")
     : werkzeug === "update_file" ? "nur fileId und title = genau der Name aus EXAVA für diese Datei (titel aus ausfuehrung_liste bzw. job.bezug.umbenennen)"
     : upload && ![leaseRoh()?.archiv, leaseRoh()?.whatsapp].some((z) => typeof z === "string" && ti.parentId === z) ? "Zielordner nicht bestätigt – parentId nur 00-EXAVA/Archiv bzw. 00-EXAVA/WhatsApp (im Lauf angelegt oder per get_file_permissions und get_file_metadata bestätigt)"
