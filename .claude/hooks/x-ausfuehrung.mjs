@@ -213,28 +213,72 @@ function anhangMerken(eingabe, env) {
   }
   if (liste.length > vorher) leaseSchreiben(env, JSON.stringify({ ...l, anhaenge: liste }));
 }
-/** A-615: Drive get_file_metadata im Auftrag ablage – ein bestätigter eigener Ordner (lease.ordner) namens „Archiv“ wird lease.archiv; sonst nichts (fail closed). */
+/** A-615: Drive get_file_metadata im Auftrag ablage – ein bestätigter eigener Ordner (lease.ordner) namens „Archiv“ wird lease.archiv; sonst nichts (fail closed).
+ *  A-1050 EINGANG: auch im Drive-Fenster (eigene Ordner aus lease.eigen) – „Eingang“ → lease.eingang, „Archiv“ → lease.archiv, „_Dubletten“ mit dem Archiv als Elternordner → lease.dubletten
+ *  (Elternordner, soweit Drive ihn nennt → eingang_in bzw. archiv_in); eine Datei mit dem bestätigten Eingang als Elternordner → lease.eingang_dateien, eine Datei, die schon genau den
+ *  Namen aus EXAVA trägt (lease.umbenennen) → lease.umbenannt. */
+const eltern = (x) => [...(Array.isArray(x.parents) ? x.parents : []), ...(typeof x.parentId === "string" ? [x.parentId] : [])].filter((y) => typeof y === "string");
+const liste = (l, k) => (Array.isArray(l[k]) ? l[k].filter((x) => typeof x === "string") : []);
 function archivMerken(eingabe, env) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
   const id = eingabe.tool_input?.fileId;
-  if (!l || l.art !== "ablage" || !leaseLesen(env) || !Array.isArray(l.ordner) || !l.ordner.includes(id)) return;
+  if (!l || !UMBENENNEN_ARTEN.has(l.art) || !leaseLesen(env) || typeof id !== "string" || !/^[A-Za-z0-9_-]{6,200}$/.test(id)) return;
   const o = alleObjekte(eingabe.tool_response);
   if (o.some((x) => x.isError === true || x.is_error === true)) return;
-  const ordner = (name) => o.some((x) => x.id === id && (x.name ?? x.title) === name && x.mimeType === "application/vnd.google-apps.folder"), d = datevAus(l.datev);
-  if (ordner("Archiv")) leaseSchreiben(env, JSON.stringify({ ...l, archiv: id }));
-  else if (ordner("WhatsApp")) leaseSchreiben(env, JSON.stringify({ ...l, whatsapp: id })); // A-924 Erweiterung: Ablageordner der WhatsApp-Dokumente
+  const selbst = o.find((x) => x.id === id), ordnerMime = selbst?.mimeType === "application/vnd.google-apps.folder", name = selbst ? (selbst.name ?? selbst.title) : undefined;
+  if (selbst && !ordnerMime) { // A-1050: Datei
+    const neu = {}, im = eltern(selbst).includes(l.eingang) && typeof l.eingang === "string", benannt = umbenennenAus(l.umbenennen).some((u) => u.file_id === id && u.titel === name);
+    if (im && !liste(l, "eingang_dateien").includes(id)) neu.eingang_dateien = [...liste(l, "eingang_dateien"), id].slice(-200);
+    if (benannt && !liste(l, "umbenannt").includes(id)) neu.umbenannt = [...liste(l, "umbenannt"), id].slice(-300);
+    if (Object.keys(neu).length) leaseSchreiben(env, JSON.stringify({ ...l, ...neu }));
+    return;
+  }
+  const ordner = (n) => ordnerMime && name === n, d = l.art === "ablage" ? datevAus(l.datev) : null, e = eltern(selbst ?? {})[0];
+  const eigen = l.art === "ablage" ? Array.isArray(l.ordner) && l.ordner.includes(id) : liste(l, "eigen").includes(id); // Ablage wie bisher (lease.ordner), Drive-Fenster: eigene Ordner
+  if (!eigen) return;
+  if (ordner("Archiv")) leaseSchreiben(env, JSON.stringify({ ...l, archiv: id, ...(e ? { archiv_in: e } : {}) }));
+  else if (ordner("Eingang")) leaseSchreiben(env, JSON.stringify({ ...l, eingang: id, ...(e ? { eingang_in: e } : {}) })); // A-1050
+  else if (ordner("_Dubletten") && typeof l.archiv === "string" && eltern(selbst).includes(l.archiv)) leaseSchreiben(env, JSON.stringify({ ...l, dubletten: id })); // A-1050
+  else if (l.art === "ablage" && ordner("WhatsApp")) leaseSchreiben(env, JSON.stringify({ ...l, whatsapp: id })); // A-924 Erweiterung: Ablageordner der WhatsApp-Dokumente
   else if (d && ordner(d.ordner[2])) leaseSchreiben(env, JSON.stringify({ ...l, datev_ziel: id })); // A-818 (G5): bestätigter eigener Monatsordner des DATEV-Pakets
+}
+/** A-1050 EINGANG: Liste des bestätigten Ordners 00-EXAVA/Eingang – search_files mit genau „parentId = '<lease.eingang>'“ (optional „and trashed = false“) ohne Fehler: die Dateien der
+ *  Antwort (mit Name und MIME, keine Ordner) → lease.eingang_dateien (die letzten 200); jede andere Abfrage zählt nicht (fail closed). */
+export const EINGANG_ABFRAGE = /^\s*parentId\s*=\s*'([A-Za-z0-9_-]{6,200})'(?:\s+and\s+trashed\s*=\s*false)?\s*$/;
+function eingangListeMerken(eingabe, env) {
+  let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
+  const m = EINGANG_ABFRAGE.exec(String(eingabe.tool_input?.query ?? ""));
+  if (!l || !UMBENENNEN_ARTEN.has(l.art) || !leaseLesen(env) || !m || typeof l.eingang !== "string" || m[1] !== l.eingang) return;
+  const o = alleObjekte(eingabe.tool_response);
+  if (o.some((x) => x.isError === true || x.is_error === true)) return;
+  const ids = [...new Set(o.filter((x) => typeof x.id === "string" && /^[A-Za-z0-9_-]{6,200}$/.test(x.id) && x.id !== l.eingang && typeof x.mimeType === "string"
+    && x.mimeType !== "application/vnd.google-apps.folder" && typeof (x.name ?? x.title) === "string").map((x) => x.id))];
+  if (!ids.length) return;
+  leaseSchreiben(env, JSON.stringify({ ...l, eingang_dateien: [...liste(l, "eingang_dateien").filter((x) => !ids.includes(x)), ...ids].slice(-200) }));
+}
+/** A-1050 EINGANG: update_file am Ort (nur fileId und title bzw. name) ohne Fehler und genau auf den Namen aus EXAVA (lease.umbenennen) → lease.umbenannt (die letzten 300) – die
+ *  Bedingung „erst nach bestätigter Erfassung und Umbenennung“ der Verschiebung (hintergrund-policy.mjs eingangVerschieben). */
+function umbenanntMerken(eingabe, env) {
+  let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
+  const ti = eingabe.tool_input ?? {}, titel = ti.title ?? ti.name;
+  if (!l || !UMBENENNEN_ARTEN.has(l.art) || !leaseLesen(env) || ti.parentId !== undefined || typeof ti.fileId !== "string" || typeof titel !== "string") return;
+  if (alleObjekte(eingabe.tool_response).some((x) => x.isError === true || x.is_error === true)) return;
+  if (!umbenennenAus(l.umbenennen).some((u) => u.file_id === ti.fileId && u.titel === titel) || liste(l, "umbenannt").includes(ti.fileId)) return;
+  leaseSchreiben(env, JSON.stringify({ ...l, umbenannt: [...liste(l, "umbenannt"), ti.fileId].slice(-300) }));
 }
 /** A-930d: Drive create_file eines Ordners im Auftrag ablage – „Archiv“ bzw. „WhatsApp“, angelegt in einem bestätigten eigenen Elternordner (lease.ordner; nur das lässt die Policy zu), ist eigen:
  *  seine ID aus der Antwort → lease.ordner und lease.archiv bzw. lease.whatsapp (sonst bleibt jeder Upload bis get_file_permissions und get_file_metadata gesperrt); sonst nichts (fail closed). */
 function ordnerAngelegt(eingabe, env) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
   const ti = eingabe.tool_input ?? {}, name = ti.title ?? ti.name, eltern = ti.parentId ?? (Array.isArray(ti.parents) ? ti.parents[0] : undefined);
-  if (!l || l.art !== "ablage" || !leaseLesen(env) || ti.mimeType !== "application/vnd.google-apps.folder" || !["Archiv", "WhatsApp"].includes(name) || !Array.isArray(l.ordner) || !l.ordner.includes(eltern)) return;
+  const dub = name === "_Dubletten" && UMBENENNEN_ARTEN.has(l?.art) && typeof l?.archiv === "string" && eltern === l.archiv; // A-1050: Ordner der Dubletten im bestätigten Archiv
+  if (!l || !leaseLesen(env) || ti.mimeType !== "application/vnd.google-apps.folder" || (!dub && (l.art !== "ablage" || !["Archiv", "WhatsApp"].includes(name) || !Array.isArray(l.ordner) || !l.ordner.includes(eltern)))) return;
   const o = alleObjekte(eingabe.tool_response);
   if (o.some((x) => x.isError === true || x.is_error === true)) return;
   const neu = o.filter((x) => typeof x.id === "string" && /^[A-Za-z0-9_-]{6,200}$/.test(x.id) && (x.name ?? x.title) === name && (x.mimeType === undefined || x.mimeType === "application/vnd.google-apps.folder"));
-  if (neu.length !== 1 || (!l.ordner.includes(neu[0].id) && l.ordner.length >= 20)) return;
+  if (neu.length !== 1) return;
+  if (dub) { leaseSchreiben(env, JSON.stringify({ ...l, dubletten: neu[0].id })); return; } // A-1050
+  if (!l.ordner.includes(neu[0].id) && l.ordner.length >= 20) return;
   leaseSchreiben(env, JSON.stringify({ ...l, ordner: l.ordner.includes(neu[0].id) ? l.ordner : [...l.ordner, neu[0].id], ...(name === "Archiv" ? { archiv: neu[0].id } : { whatsapp: neu[0].id }) }));
 }
 /** A-924 AM ORT: geplante Umbenennungen aus job.bezug.umbenennen (von EXAVA, nie vom Modell) – { file_id, titel } mit Drive-ID und Name ≤ 220 Zeichen, höchstens 20. */
@@ -476,7 +520,9 @@ function ordnerBestaetigen(eingabe, env) {
   const ungeteilt = Array.isArray(l.ungeteilt) ? l.ungeteilt.filter((x) => typeof x === "string") : [];
   const nurEigen = rechte.length > 0 && rechte.every((x) => x.role === "owner" && (x.type === undefined || x.type === "user") && (typeof x.emailAddress !== "string" || l.adressen.includes(x.emailAddress.toLowerCase())));
   const datei = Array.isArray(l.umbenennen) && l.umbenennen.some((u) => u?.file_id === id); // A-930 Nachtrag: eine Datei zum Umbenennen ist kein Ordner – sonst füllen 20 Umbenennungen lease.ordner und 00-EXAVA ist nicht mehr bestätigbar
-  const neu = { ...(l.art !== "ablage" || datei || ordner.includes(id) || ordner.length >= 20 ? {} : { ordner: [...ordner, id] }), ...(nurEigen && !ungeteilt.includes(id) ? { ungeteilt: [...ungeteilt, id].slice(-300) } : {}) }; // A-924 Erweiterung: Ordner nur in der Ablage; A-930: die letzten 300 Dateien (Ausführungslauf ≤ 500)
+  const eigenAlt = Array.isArray(l.eigen) ? l.eigen.filter((x) => typeof x === "string") : []; // A-1050 EINGANG: eigene Ordner im Drive-Fenster (Bestätigung per get_file_metadata)
+  const neu = { ...(l.art !== "ablage" || datei || ordner.includes(id) || ordner.length >= 20 ? {} : { ordner: [...ordner, id] }), ...(nurEigen && !ungeteilt.includes(id) ? { ungeteilt: [...ungeteilt, id].slice(-300) } : {}),
+    ...(l.art !== "ablage" && !datei && !eigenAlt.includes(id) ? { eigen: [...eigenAlt, id].slice(-50) } : {}) }; // A-924 Erweiterung: Ordner nur in der Ablage; A-930: die letzten 300 Dateien (Ausführungslauf ≤ 500)
   if (Object.keys(neu).length) leaseSchreiben(env, JSON.stringify({ ...l, ...neu }));
 }
 
@@ -519,6 +565,8 @@ export async function nachher(eingabe, { env = process.env, f = fetch } = {}) {
   if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_file_permissions") { mitLeaseSperre(env, () => ordnerBestaetigen(eingabe, env)); return { code: 0 }; } // A-930: parallel sicher
   if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_file_metadata") { mitLeaseSperre(env, () => archivMerken(eingabe, env)); return { code: 0 }; } // A-615
   if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "create_file" && eingabe.tool_input?.base64Content === undefined) { mitLeaseSperre(env, () => ordnerAngelegt(eingabe, env)); return { code: 0 }; } // A-930d: im Lauf angelegter Ablageordner
+  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "search_files") { mitLeaseSperre(env, () => eingangListeMerken(eingabe, env)); return { code: 0 }; } // A-1050 EINGANG
+  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "update_file") { mitLeaseSperre(env, () => umbenanntMerken(eingabe, env)); return { code: 0 }; } // A-1050 EINGANG
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "heartbeat_job") { mitLeaseSperre(env, () => namenMerken(eingabe, env)); return { code: 0 }; } // A-924 Erweiterung: Namen zum Umbenennen am Ort
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "ausfuehrung_liste") { mitLeaseSperre(env, () => ausfuehrungMerken(eingabe, env)); return { code: 0 }; } // A-930 (Weg A)
   if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "download_file_content") { originalMerken(eingabe, env, "drive"); return { code: 0 }; } // A-608 BELEG-ORIGINAL

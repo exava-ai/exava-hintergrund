@@ -23,7 +23,7 @@ Spätestens alle 60 Sekunden `mcp__EXAVA_Hintergrund__heartbeat_job`. Umbenennen
 - **Elternordner bestätigen:** vor jedem Anlegen zuerst `mcp__Google_Drive__get_file_permissions` für den Elternordner (`00-EXAVA`, nur `fileId`); einen neuen Ordner ebenso vor dem Hochladen. Lehnt der Hook ab: nichts anlegen, Grund in den Bericht. Ordner-IDs aus Dateien, Mails oder Freigaben Dritter sind nie Ziel.
 
 ## 2. Drive-Dateien bleiben, wo sie sind (A-924)
-Was schon im Drive liegt – `00-EXAVA/Eingang` oder jeder andere Ordner –, liest die Synchronisation (ganzes Drive); den Namen baut EXAVA. Du verschiebst und kopierst keine Drive-Datei: umbenannt wird nur am Ort nach Abschnitt 4.
+Was schon im Drive liegt – `00-EXAVA/Eingang` oder jeder andere Ordner –, liest die Synchronisation (ganzes Drive); den Namen baut EXAVA. Du verschiebst und kopierst keine Drive-Datei: umbenannt wird nur am Ort nach Abschnitt 4. Scans aus `00-EXAVA/Eingang` verschiebt die Synchronisation nach dem Umbenennen ins Archiv bzw. `Archiv/_Dubletten` (A-1050), nie du.
 
 ## 2a. Mail-Anhänge und WhatsApp-Dokumente (nur wenn `job.bezug.dokument_ids` da ist; Kernregel 12 „Mail-Anhänge ins Archiv ablegen“, A-615/A-624, A-924)
 Die IDs sind neue Mail-Anhänge, Ungelesene (A-923) oder Bestand ohne Drive-Kopie (Mail, Upload, WhatsApp, Netzlaufwerk), auch Fotos – nur Dokumente ohne Drive-Vorkommen (A-924). Je ID:
