@@ -441,9 +441,10 @@ export function mimeAnhaenge(roh, tiefe = 0, out = []) {
   return out;
 }
 /** A-642: Ein MCP-Ergebnis über MAX_MCP_OUTPUT_TOKENS (schon eine PDF ab ~70 KB) speichert Claude Code vollständig unter <Projektordner>/<session_id>/tool-results/ und meldet nur
- *  „Output has been saved to <pfad>“. Gelesen wird genau diese Datei: nur in diesem Ordner, reguläre Datei ohne Verweis, ≤ Grenze, `id` der Antwort = angefragte ID; sonst []. */
-export function gespeicherteAusgabe(eingabe, id) {
-  const m = /Output has been saved to (\/[^\s"\\]+\.txt)/.exec(JSON.stringify(eingabe?.tool_response ?? ""));
+ *  „Output has been saved to <pfad>“. Gelesen wird genau diese Datei: nur in diesem Ordner, reguläre Datei ohne Verweis, ≤ Grenze, `id` der Antwort = angefragte ID; sonst [].
+ *  A-1071 P1: nur mit o.vollForm (Lease aus arbeit_holen) auch die zweite Meldeform „persisted-output … Full output saved to: <pfad>“ – dieselben Prüfungen; die heutigen Aufrufer unverändert. */
+export function gespeicherteAusgabe(eingabe, id, o = {}) {
+  const roh = JSON.stringify(eingabe?.tool_response ?? ""), m = /Output has been saved to (\/[^\s"\\]+\.txt)/.exec(roh) ?? (o.vollForm === true ? /Full output saved to: (\/[^\s"\\]+\.txt)/.exec(roh) : null);
   const tp = eingabe?.transcript_path, sid = eingabe?.session_id;
   if (!m || typeof tp !== "string" || typeof sid !== "string" || !/^[A-Za-z0-9_-]{8,80}$/.test(sid)) return [];
   if (dirname(m[1]) !== join(dirname(tp), sid, "tool-results") || !/^mcp-[A-Za-z0-9_.-]{1,200}\.txt$/.test(basename(m[1]))) return [];
@@ -554,10 +555,12 @@ export async function nachher(eingabe, { env = process.env, f = fetch } = {}) {
   if (eingabe?.tool_name === "Bash") { mailPdfMerken(eingabe, env); return { code: 0 }; } // A-657 GO pdf.py
   const t = mcpTeile(eingabe?.tool_name);
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "arbeit_holen") {
-    const o = antwortObjekte(eingabe.tool_response).find((x) => typeof x.lease_token === "string" && x.job && typeof x.lauf_id === "string");
+    const lease = (x) => typeof x.lease_token === "string" && x.job && typeof x.lauf_id === "string";
+    // A-1071 P1: über 50.000 Zeichen lagert Claude Code die Antwort aus – dann die Lease aus der gespeicherten Antwort dieser Sitzung (gespeicherteAusgabe, beide Meldeformen); sonst {} wie bisher
+    const o = antwortObjekte(eingabe.tool_response).find(lease) ?? (() => { try { return gespeicherteAusgabe(eingabe, null, { vollForm: true }).find((x) => lease(x) && typeof x.job.id === "string"); } catch { return undefined; } })();
     mkdirSync(join(projekt(env), ".exava"), { recursive: true });
     mkdirSync(join(projekt(env), "arbeit"), { recursive: true }); // A-632 FOLGE: curl -o legt keinen Ordner an – arbeit/ steht vor dem ersten Laden
-    leaseSchreiben(env, JSON.stringify(o ? { job_id: o.job.id, lauf_id: o.lauf_id, lease_token: o.lease_token, ...(Number.isInteger(o.lease_generation) ? { lease_generation: o.lease_generation } : {}) /* A-901: Lease-Weitergabe an x-scan */, ...(typeof o.silo === "string" ? { silo: o.silo } : {}), ...(typeof o.job.art === "string" ? { art: o.job.art } : {}), ...(o.job.art === "belegsuche" && o.job.bezug?.csv === true ? { csv: true } : {}), ...(o.job.art === "ablage" && datevAus(o.job.bezug?.datev_paket) ? { datev: datevAus(o.job.bezug.datev_paket) } : {}) /* A-818 */, ...(o.job.art === "ablage" && umbenennenAus(o.job.bezug?.umbenennen).length ? { umbenennen: umbenennenAus(o.job.bezug.umbenennen) } : {}) /* A-924 AM ORT */, adressen: adressen(o.job),
+    leaseSchreiben(env, JSON.stringify(o ? { job_id: o.job.id, lauf_id: o.lauf_id, lease_token: o.lease_token, ...(Number.isInteger(o.lease_generation) ? { lease_generation: o.lease_generation } : {}) /* A-901: Lease-Weitergabe an x-scan */, ...(o.messung === 2 ? { messung: 2 } : {}) /* A-1071 P1: Messform des Servers */, ...(typeof o.silo === "string" ? { silo: o.silo } : {}), ...(typeof o.job.art === "string" ? { art: o.job.art } : {}), ...(o.job.art === "belegsuche" && o.job.bezug?.csv === true ? { csv: true } : {}), ...(o.job.art === "ablage" && datevAus(o.job.bezug?.datev_paket) ? { datev: datevAus(o.job.bezug.datev_paket) } : {}) /* A-818 */, ...(o.job.art === "ablage" && umbenennenAus(o.job.bezug?.umbenennen).length ? { umbenennen: umbenennenAus(o.job.bezug.umbenennen) } : {}) /* A-924 AM ORT */, adressen: adressen(o.job),
       ...(Array.isArray(o.job.bezug?.whatsapp_ids) ? { whatsapp_ids: o.job.bezug.whatsapp_ids.filter((x) => typeof x === "string" && UUID.test(x)).map((x) => x.toLowerCase()).slice(0, 50) } : {}) /* A-924 Erweiterung */,
       ...(WEB_ARTEN.has(o.job.art) ? { web: [...new Set(textAdressen(o.job.eingabe))] } : {}) } : {})); // A-534: art und Postfächer für die Ausnahmen der Policy; A-626 WEB: Adressen aus dem Auftrag
     return { code: 0 };

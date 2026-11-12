@@ -16,7 +16,7 @@
 //   und im Netz „Trusted“ wäre sie ein Weg nach draußen und an .claude/ vorbei;
 //   A-901 (Bauherr 02.11.2026): dazu im Helfer genau ingest_document von „EXAVA Hintergrund“ (scanIngest) – die Lease setzt dieser Hook per updatedInput aus .exava/lease.json, der Helfer bekommt sie nie;
 //   A-901 Teil 2: den Helfer nur im Vordergrund (run_in_background: false) und nur mit subagent_type, prompt, description starten (SCAN_AGENT_FELDER); sein erster Aufruf bindet
-//   ihn an den laufenden Auftrag (.exava/helfer-<sha256>.json; außerdem schreibt dieser Hook nur .exava/verbrauch.json, A-1007 H) – nach einem Auftragswechsel keine Lease mehr für ihn;
+//   ihn an den laufenden Auftrag (.exava/helfer-<sha256>.json; außerdem schreibt dieser Hook nur .exava/verbrauch.json, A-1007 H, sowie A-1071 .exava/messung.jsonl und .exava/lesen-<sha256>.json) – nach einem Auftragswechsel keine Lease mehr für ihn;
 //   A-930 (Weg A): dritter Helfer x-drive-batch (Ausführungsauftrag bezug.nur_ausfuehren) – im Helfer EXAVA nur ausfuehrung_liste, exava_datei_lesen und heartbeat_job (Lease per updatedInput
 //   wie A-901), Drive lesend plus am Ort umbenennen und WhatsApp-Upload nach hygieneAusnahme (dieselben Prüfungen wie im Hauptlauf), Bash nur curl -o von der download_url (BASH_LADEN);
 //   EXAVA nur vom Connector „EXAVA Hintergrund“ und nur die Werkzeuge in EXAVA_WERKZEUGE (der Server prüft Profil, Auftrag und Lease zusätzlich);
@@ -44,10 +44,15 @@
 //   Sitzungsprotokoll (transcript_path der Hook-Eingabe und Helfer-Protokolle; nur Zahlen und Modell, nie Inhalte) abzüglich des zuletzt gemeldeten Stands (.exava/verbrauch.json);
 //   EXAVA bucht ihn als Abo-Verbrauch (ohne Betrag). Ein vom Modell mitgegebenes verbrauch fällt weg; ohne lesbares Protokoll, ohne Zustandsdatei oder wenn der Stand einer schon
 //   abgeschlossenen Sitzung fehlt, kein verbrauch (lieber nichts als doppelt) – complete_job läuft immer weiter, nie ein Block.
-// Rein lokal, ohne Netz, ohne Umgebungsvariable. Fail closed: unlesbare Eingabe, Vertrag nicht lesbar, Absturz und Frist → Exit 2.
+//   A-1071 P1 (Messen, GO Bauherr 12.11.2026): Meldet arbeit_holen messung: 2 (Lease), trägt verbrauch zusätzlich Teile je Rolle (haupt, Helfertyp aus der Bindung), Modell und Stufe der
+//   Protokollzeile (effort, perTurnEffort) mit Denk-Token und Antworten, Züge des Hauptprotokolls, Client, Stufe laut Hook (effort.level beim Abschluss, beim ersten Aufruf und je Aufruf aus
+//   .exava/messung.jsonl), Umgebung (CLAUDE_CODE_EFFORT_LEVEL, CLAUDE_AUTO_BACKGROUND_TASKS – nur gemeldet) und Helfer (Starts, Rückgabe-Zeichen); auch bei ask_user ohne dokument_ids.
+//   Verbrauch = Stand jetzt minus Stand bei Auftragsbeginn bei jedem Versuch (nicht mehr eingefroren); ohne messung die alte Form. Bei ingest_document aus x-scan setzt der Hook
+//   gelesen_von (Leseweg aus .exava/lesen-<sha256>.json und Modell des Helfers). Jeder Mess- und Merkpfad wirft nie und ändert keine Entscheidung (G7); nur Zahlen und Namen (G8).
+// Rein lokal, ohne Netz; Umgebungsvariablen nur für die Messung gelesen (A-1071). Fail closed: unlesbare Eingabe, Vertrag nicht lesbar, Absturz und Frist → Exit 2.
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const FRIST_MS = 10_000; // Skript endet spätestens nach 10 s (Hook-Timeout 30 s)
@@ -420,62 +425,165 @@ const startAdresse = (name, werkzeug, ti) => werkzeug !== "browser_starten" || (
 export const VERBRAUCH_MS = 4000;
 const VERBRAUCH_FELDER = ["input", "output", "cache_read", "cache_creation"], VERBRAUCH_MAX = 700_000_000;
 const tokenZahl = (x) => (Number.isFinite(x) && x > 0 ? Math.min(Math.floor(x), VERBRAUCH_MAX) : 0);
+/** A-1071 P1: Denkstufen wie X_DENKSTUFEN in lib/x/einstellungen.ts (scripts/test/a1071-abo-messung.ts prüft die Gleichheit); Stufe aus einem Namen oder { level } – sonst "". */
+export const STUFEN = new Set(["low", "medium", "high", "xhigh", "max"]);
+const stufeVon = (x) => (typeof x === "string" && STUFEN.has(x) ? x : typeof x?.level === "string" && STUFEN.has(x.level) ? x.level : "");
+const ZAEHLER_MAX = 1_000_000, STAND_TEILE_MAX = 64, TEILE_MAX = 16, HELFER_DATEIEN_MAX = 400;
+/** A-1071 P1: nach dem Lesen des Hauptprotokolls einmal neu lesen, wenn der laufende Aufruf noch fehlt (das Protokoll wird asynchron geschrieben). */
+export const NACHLESEN_MS = 150;
+const warten = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* ohne Warten */ } };
+/** A-1071 P1: ein Aufruf ohne dokument_ids (ask_user kann den Auftrag anhalten) – dieselbe Regel für Meldung und frühere Abschlüsse. */
+const ohneDokumente = (ti) => ti?.dokument_ids === undefined;
+const abschlussAufruf = (b, ask) => /complete_job$/.test(String(b?.name ?? "")) || (ask && /ask_user$/.test(String(b?.name ?? "")) && ohneDokumente(b.input));
+const teilVon = (teile, rolle, modell, stufe, stufe_zug) => { const k = [rolle, modell, stufe, stufe_zug].join("|");
+  return (teile[k] ??= { rolle, modell, stufe, stufe_zug, input: 0, output: 0, cache_read: 0, cache_creation: 0, denken: 0, antworten: 0, eingabe_erste: 0 }); };
+/** A-1071 P1: Zug = Prompt-Zeile des Hauptprotokolls (type user) ohne tool_result, ohne isMeta (Skill-Inhalte), ohne isCompactSummary; Benachrichtigung = origin.kind task-notification, sonstige = ohne origin.kind. */
+const zugZaehlen = (a, o) => {
+  if (o?.type !== "user" || o.isMeta === true || o.isCompactSummary === true || (Array.isArray(o.message?.content) && o.message.content.some((b) => b?.type === "tool_result"))) return;
+  if (typeof o.uuid === "string") { if (a.gesehen.has(`zug:${o.uuid}`)) return; a.gesehen.add(`zug:${o.uuid}`); }
+  a.zuege.gesamt++; if (o.origin?.kind === "task-notification") a.zuege.benachrichtigung++; else if (o.origin?.kind == null) a.zuege.sonstige++;
+};
+/** A-1071 P1: Rolle eines Helferprotokolls (agent-<id>.jsonl) aus der Bindung dieses Helfers (helferBinden), sonst helfer. */
+const helferRolle = (datei) => { const id = /^agent-([\w-]{1,120})\.jsonl$/.exec(basename(datei))?.[1];
+  try { const p = id ? helferDatei(id) : ""; const r = p && lstatSync(p).isFile() ? JSON.parse(readFileSync(p, "utf8"))?.rolle : null; return HELFER.has(r) ? r : "helfer"; } catch { return "helfer"; } };
+/** A-1007 H, A-1071 P1: ein Protokoll zählen – je Antwort (message.id) einmal, nur mit Mengenangabe (input_tokens und output_tokens als Zahl), nur usage und Modell, nie Inhalte; je Teil Rolle |
+ *  Modell | Stufe der Zeile (effort) | Stufe des Zugs (perTurnEffort) mit Denk-Token (output_tokens_details.thinking_tokens) und Antworten, in Helferteilen die Eingabe der ersten Antwort;
+ *  im Hauptprotokoll Züge (Vorfilter per Zeichenkette – tool_result-Zeilen werden nicht als JSON gelesen), Client (version der letzten Antwortzeile), frühere Abschlüsse (ohne den laufenden
+ *  Aufruf) und ob der laufende Aufruf schon drin steht. Fehlt ein Feld, fehlt nur das Messfeld. false = Zeitbudget überschritten. */
+function protokollZaehlen(a, text, i, rolle, laufend, ask, start) {
+  let erste = i > 0;
+  for (const zeile of text.split("\n")) {
+    if (Date.now() - start > VERBRAUCH_MS) return false;
+    if (i === 0 && zeile.includes('"type":"user"') && !zeile.includes('"tool_result"')) { try { zugZaehlen(a, JSON.parse(zeile)); } catch { /* keine Zeile */ } continue; }
+    if (!zeile.includes('"usage"')) continue;
+    let o; try { o = JSON.parse(zeile); } catch { continue; }
+    const m = o?.type === "assistant" && o.message && typeof o.message === "object" ? o.message : null, u = m?.usage;
+    if (i === 0 && Array.isArray(m?.content)) for (const b of m.content) if (b?.type === "tool_use") {
+      if (laufend && b.id === laufend) a.vorhanden = true;
+      else if (abschlussAufruf(b, ask) && !a.gesehen.has(`tu:${b.id}`)) { a.gesehen.add(`tu:${b.id}`); a.abschluesse++; }
+    }
+    if (!u || typeof u !== "object" || !Number.isFinite(u.input_tokens) || !Number.isFinite(u.output_tokens)) continue; // ohne Mengenangabe nichts zählen (nie als 0 gedeutet)
+    const id = typeof m.id === "string" && m.id ? m.id : `${i}:${o.uuid}`;
+    if (a.gesehen.has(id)) continue; // eine Antwort steht je Inhaltsblock mehrfach im Protokoll, mit derselben usage
+    a.gesehen.add(id);
+    const z = { input: tokenZahl(u.input_tokens), output: tokenZahl(u.output_tokens), cache_read: tokenZahl(u.cache_read_input_tokens), cache_creation: tokenZahl(u.cache_creation_input_tokens) };
+    for (const f of VERBRAUCH_FELDER) a[f] += z[f];
+    const modell = typeof m.model === "string" && /^[\w.:/-]{1,80}$/.test(m.model) ? m.model : "";
+    if (i === 0 && modell) a.modell = modell;
+    if (i === 0 && typeof o.version === "string" && /^[\d.]{1,20}$/.test(o.version)) a.client = o.version;
+    const t = teilVon(a.teile, rolle, modell, stufeVon(o.effort), stufeVon(o.perTurnEffort));
+    for (const f of VERBRAUCH_FELDER) t[f] += z[f];
+    t.denken += tokenZahl(u.output_tokens_details?.thinking_tokens); t.antworten++;
+    if (erste) { t.eingabe_erste += z.input + z.cache_read + z.cache_creation; erste = false; }
+  }
+  return true;
+}
 /** A-1007 H: Token dieser Claude-Sitzung aus dem Sitzungsprotokoll (transcript_path der Hook-Eingabe) und den Protokollen ihrer Helfer (<sitzung>/subagents/*.jsonl, ältere Ablage
  *  agent-*.jsonl derselben Sitzung) – je Antwort (message.id) einmal, nur Antworten mit Mengenangabe (input_tokens und output_tokens als Zahl), nur usage und Modell des
- *  Hauptprotokolls, nie Inhalte; abschluesse = frühere complete_job-Aufrufe dieser Sitzung (ohne den laufenden, tool_use_id). Unlesbar oder über VERBRAUCH_MS → null. */
+ *  Hauptprotokolls, nie Inhalte; abschluesse = frühere complete_job-Aufrufe dieser Sitzung (ohne den laufenden, tool_use_id). Unlesbar oder über VERBRAUCH_MS → null.
+ *  A-1071 P1: dazu teile, zuege, client und unvollstaendig (der laufende Aufruf steht nach einmaligem Nachlesen noch nicht im Hauptprotokoll); mit Messform 2 zählt auch ein früheres ask_user
+ *  ohne dokument_ids als Abschluss (dabei wurde der Stand geschrieben). Gesamtsumme und Hauptmodell wie bisher. */
 export function sitzungsVerbrauch(e, start = Date.now()) {
   const pfad = typeof e?.transcript_path === "string" ? e.transcript_path : "", sitzung = typeof e?.session_id === "string" ? e.session_id : "";
   if (!pfad.endsWith(".jsonl") || !/^[A-Za-z0-9_-]{8,80}$/.test(sitzung)) return null;
-  const ordner = dirname(pfad), dateien = [pfad], laufend = typeof e?.tool_use_id === "string" ? e.tool_use_id : null;
-  try { for (const f of readdirSync(join(ordner, sitzung, "subagents"))) if (f.endsWith(".jsonl")) dateien.push(join(ordner, sitzung, "subagents", f)); } catch { /* ohne Helfer */ }
-  try { for (const f of readdirSync(ordner)) if (/^agent-[\w-]+\.jsonl$/.test(f)) dateien.push(join(ordner, f)); } catch { /* ohne ältere Ablage */ }
-  const s = { sitzung, modell: "", input: 0, output: 0, cache_read: 0, cache_creation: 0, abschluesse: 0 }, gesehen = new Set();
-  for (const [i, d] of dateien.entries()) {
-    let text; try { text = readFileSync(d, "utf8"); } catch { if (i === 0) return null; continue; }
-    if (i > 0 && dirname(d) === ordner && !text.includes(`"sessionId":"${sitzung}"`)) continue; // ältere Ablage: nur Helfer dieser Sitzung
-    for (const zeile of text.split("\n")) {
-      if (Date.now() - start > VERBRAUCH_MS) return null;
-      if (!zeile.includes('"usage"')) continue;
-      let o; try { o = JSON.parse(zeile); } catch { continue; }
-      const m = o?.type === "assistant" && o.message && typeof o.message === "object" ? o.message : null, u = m?.usage;
-      if (i === 0 && Array.isArray(m?.content)) for (const b of m.content) if (b?.type === "tool_use" && /complete_job$/.test(String(b.name ?? "")) && b.id !== laufend && !gesehen.has(`tu:${b.id}`)) { gesehen.add(`tu:${b.id}`); s.abschluesse++; }
-      if (!u || typeof u !== "object" || !Number.isFinite(u.input_tokens) || !Number.isFinite(u.output_tokens)) continue; // ohne Mengenangabe nichts zählen (nie als 0 gedeutet)
-      const id = typeof m.id === "string" && m.id ? m.id : `${i}:${o.uuid}`;
-      if (gesehen.has(id)) continue; // eine Antwort steht je Inhaltsblock mehrfach im Protokoll, mit derselben usage
-      gesehen.add(id);
-      s.input += tokenZahl(u.input_tokens); s.output += tokenZahl(u.output_tokens); s.cache_read += tokenZahl(u.cache_read_input_tokens); s.cache_creation += tokenZahl(u.cache_creation_input_tokens);
-      if (i === 0 && typeof m.model === "string" && /^[\w.:/-]{1,80}$/.test(m.model)) s.modell = m.model;
-    }
+  const ordner = dirname(pfad), helfer = [], laufend = typeof e?.tool_use_id === "string" ? e.tool_use_id : null, ask = leaseRoh()?.messung === 2;
+  try { for (const f of readdirSync(join(ordner, sitzung, "subagents"))) if (f.endsWith(".jsonl")) helfer.push(join(ordner, sitzung, "subagents", f)); } catch { /* ohne Helfer */ }
+  try { for (const f of readdirSync(ordner)) if (/^agent-[\w-]+\.jsonl$/.test(f)) helfer.push(join(ordner, f)); } catch { /* ohne ältere Ablage */ }
+  const leer = () => ({ modell: "", input: 0, output: 0, cache_read: 0, cache_creation: 0, abschluesse: 0, teile: {}, zuege: { gesamt: 0, benachrichtigung: 0, sonstige: 0 }, client: "", vorhanden: false, gesehen: new Set() });
+  const haupt = () => { let text; try { text = readFileSync(pfad, "utf8"); } catch { return null; } const a = leer(); return protokollZaehlen(a, text, 0, "haupt", laufend, ask, start) ? a : null; };
+  let h = haupt(); if (!h) return null;
+  if (laufend && !h.vorhanden && Date.now() - start < VERBRAUCH_MS / 2) { warten(NACHLESEN_MS); const h2 = haupt(); if (h2) h = h2; } // A-1071: Protokoll läuft nach
+  const w = leer();
+  for (const [n, d] of helfer.entries()) {
+    let text; try { text = readFileSync(d, "utf8"); } catch { continue; }
+    if (dirname(d) === ordner && !text.includes(`"sessionId":"${sitzung}"`)) continue; // ältere Ablage: nur Helfer dieser Sitzung
+    if (!protokollZaehlen(w, text, n + 1, helferRolle(d), null, false, start)) return null;
   }
+  const s = { sitzung, modell: h.modell, abschluesse: h.abschluesse, teile: { ...h.teile, ...w.teile }, zuege: h.zuege, client: h.client, unvollstaendig: !!laufend && !h.vorhanden };
+  for (const f of VERBRAUCH_FELDER) s[f] = h[f] + w[f];
   return s;
 }
-/** A-1007 H: Verbrauch des laufenden Auftrags = Sitzungsstand minus zuletzt gemeldeter Stand (.exava/verbrauch.json, nur dieser Hook schreibt sie); je Auftrag und Lease-Generation genau
- *  einmal festgelegt – eine Wiederholung von complete_job meldet dieselben Zahlen (EXAVA bucht je Auftrag und Generation einmal). Ohne .exava, ohne Protokoll, ohne Modellangabe
- *  oder ohne Stand einer Sitzung, die schon abgeschlossen hat (Rückfall nach verlorenem Zustand) → null (lieber nichts als doppelt). */
+/** A-1071 P1: Stand für den Abgleich je Sitzung – Gesamtsumme, Teile und Züge. */
+const standVon = (s) => ({ summe: Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, s[f]])), teile: Object.fromEntries(Object.entries(s.teile).slice(0, STAND_TEILE_MAX)), zuege: s.zuege });
+const standGueltig = (x) => x === null || (!!x && typeof x === "object" && !!x.summe && typeof x.summe === "object" && !!x.teile && typeof x.teile === "object");
+/** A-1071 P1: Zähler dieses Auftrags aus .exava/messung.jsonl – erste Stufe laut Hook, Aufrufe je Stufe, Rückgaben der Helfer je Rolle (Anzahl, Zeichen); jeder Fehler → leer. */
+function zaehlerLesen(job) {
+  const out = { stufe_start: "", hook_stufen: {}, rueckgaben: {} };
+  try {
+    const datei = join(projektDir(), ".exava", "messung.jsonl"), st = lstatSync(datei);
+    if (!st.isFile() || st.size > 2 * MESSUNG_DATEI_MAX) return out;
+    for (const zeile of readFileSync(datei, "utf8").split("\n")) {
+      let o; try { o = JSON.parse(zeile); } catch { continue; }
+      if (!o || String(o.j).toLowerCase() !== job) continue;
+      if (o.a === "t" && STUFEN.has(o.s)) { out.stufe_start ||= o.s; out.hook_stufen[o.s] = Math.min((out.hook_stufen[o.s] ?? 0) + 1, ZAEHLER_MAX); }
+      else if (o.a === "r") { const g = (out.rueckgaben[HELFER.has(o.r) ? o.r : "helfer"] ??= { rueckgaben: 0, rueckgabe_zeichen: 0 }); g.rueckgaben++; g.rueckgabe_zeichen = tokenZahl(g.rueckgabe_zeichen + (Number.isInteger(o.z) && o.z > 0 ? o.z : 0)); }
+    }
+  } catch { /* ohne Zähler */ }
+  return out;
+}
+/** A-1071 P1: Helfer dieses Auftrags je Rolle – Starts (Bindungsdateien, höchstens HELFER_DATEIEN_MAX gelesen), Rückgaben und Rückgabe-Zeichen, Stufe (wenn alle Bindungen der Rolle dieselbe tragen). */
+function helferLesen(job, rueckgaben) {
+  const rollen = {};
+  try {
+    const dir = join(projektDir(), ".exava");
+    for (const f of readdirSync(dir).filter((x) => /^helfer-[0-9a-f]{32}\.json$/.test(x)).slice(0, HELFER_DATEIEN_MAX)) {
+      try { const p = join(dir, f); if (!lstatSync(p).isFile()) continue; const b = JSON.parse(readFileSync(p, "utf8"));
+        if (String(b?.job_id).toLowerCase() !== job) continue;
+        const g = (rollen[HELFER.has(b.rolle) ? b.rolle : "helfer"] ??= { starts: 0, stufen: new Set() }); g.starts++; g.stufen.add(STUFEN.has(b.stufe) ? b.stufe : ""); } catch { /* eine Datei */ }
+    }
+  } catch { /* ohne Bindungen */ }
+  return [...new Set([...Object.keys(rollen), ...Object.keys(rueckgaben)])].sort().slice(0, 8).map((r) => { const g = rollen[r], q = rueckgaben[r], st = g?.stufen.size === 1 ? [...g.stufen][0] : "";
+    return { rolle: r, starts: Math.min(g?.starts ?? 0, ZAEHLER_MAX), rueckgaben: Math.min(q?.rueckgaben ?? 0, ZAEHLER_MAX), rueckgabe_zeichen: q?.rueckgabe_zeichen ?? 0, ...(st ? { stufe: st } : {}) }; });
+}
+/** A-1071 P1: Messfelder der Messform 2 (Vertrag ABO_VERBRAUCH in lib/x/connector/symbiose-schemata.ts) – Teile, Züge und Zähler als Delta zur Basis des Auftrags; nur Zahlen und Namen. */
+function messfelder(e, s, basis, job) {
+  const d = (a, b) => tokenZahl((Number(a) || 0) - (Number(b) || 0)), menge = (x) => x.input + x.output + x.cache_read + x.cache_creation;
+  const teile = Object.entries(s.teile).map(([k, t]) => { const b = basis?.teile?.[k] ?? {};
+    return { rolle: t.rolle, modell: t.modell, ...(t.stufe ? { stufe: t.stufe } : {}), ...(t.stufe_zug ? { stufe_zug: t.stufe_zug } : {}), ...Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, d(t[f], b[f])])),
+      denken: d(t.denken, b.denken), antworten: Math.min(d(t.antworten, b.antworten), ZAEHLER_MAX), ...(t.rolle !== "haupt" ? { eingabe_erste: d(t.eingabe_erste, b.eingabe_erste) } : {}) }; })
+    .filter((t) => menge(t) > 0).sort((a, b) => menge(b) - menge(a) || `${a.rolle}|${a.modell}`.localeCompare(`${b.rolle}|${b.modell}`)).slice(0, TEILE_MAX);
+  const z = zaehlerLesen(job), helfer = helferLesen(job, z.rueckgaben), stufe = stufeVon(e?.effort), umgebung = stufeVon(process.env.CLAUDE_CODE_EFFORT_LEVEL), bg = process.env.CLAUDE_AUTO_BACKGROUND_TASKS;
+  return { ...(s.client ? { client: s.client } : {}), ...(stufe ? { stufe } : {}), ...(z.stufe_start ? { stufe_start: z.stufe_start } : {}), ...(Object.keys(z.hook_stufen).length ? { hook_stufen: z.hook_stufen } : {}),
+    ...(umgebung ? { umgebung_stufe: umgebung } : {}), auto_hintergrund: typeof bg === "string" && bg !== "", zuege: Object.fromEntries(["gesamt", "benachrichtigung", "sonstige"].map((k) => [k, Math.min(d(s.zuege[k], basis?.zuege?.[k]), ZAEHLER_MAX)])),
+    unvollstaendig: s.unvollstaendig === true, ...(teile.length ? { teile } : {}), ...(helfer.length ? { helfer } : {}) };
+}
+/** A-1007 H: Verbrauch des laufenden Auftrags aus dem Sitzungsstand (.exava/verbrauch.json, nur dieser Hook schreibt sie). Ohne .exava, ohne Protokoll, ohne Modellangabe oder ohne Stand einer
+ *  Sitzung, die schon abgeschlossen hat (Rückfall nach verlorenem Zustand) → null (lieber nichts als doppelt).
+ *  A-1071 P1: Der Stand führt je Sitzung basis (Stand bei Beginn des laufenden Auftrags), aktuell (job:generation) und letzter (Stand bei der letzten Meldung). Meldung für einen anderen Schlüssel:
+ *  basis := letzter, aktuell := Schlüssel. Verbrauch = Stand jetzt minus basis bei JEDEM Versuch (EXAVA bucht je Auftrag und Generation einmal – ein abgelehnter Versuch bucht nichts, der nächste
+ *  meldet die volle Zahl). Lässt sich der Stand nicht schreiben → null (sonst rechnete der nächste Auftrag ab einem alten letzter und buchte doppelt). Neue Form nur mit messung 2 in der Lease. */
 export function auftragsVerbrauch(e, ti) {
   const job = String(ti?.job_id ?? "").toLowerCase(), gen = ti?.lease_generation, dir = join(projektDir(), ".exava");
   if (!UUID_LEASE.test(job) || !Number.isInteger(gen) || gen < 1 || !existsSync(dir)) return null;
   const s = sitzungsVerbrauch(e); if (!s || !s.modell) return null;
-  const pfad = join(dir, "verbrauch.json"), schluessel = `${job}:${gen}`, form = (x) => ({ modell: String(x.modell).slice(0, 80), ...Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, tokenZahl(x[f])])) });
+  const pfad = join(dir, "verbrauch.json"), schluessel = `${job}:${gen}`;
   let st = null; try { st = JSON.parse(readFileSync(pfad, "utf8")); } catch { /* erster Auftrag dieser Sitzung */ }
-  const gueltig = st && typeof st === "object" && st.sitzung === s.sitzung && st.auftraege && typeof st.auftraege === "object";
-  if (!gueltig && s.abschluesse > 0) return null; // Stand fehlt, aber diese Sitzung hat schon abgeschlossen: das Delta wäre doppelt
-  if (!gueltig) st = { sitzung: s.sitzung, stand: {}, auftraege: {} };
-  const alt = st.auftraege[schluessel];
-  if (alt && typeof alt === "object" && typeof alt.modell === "string" && alt.modell) return form(alt);
-  const v = form({ modell: s.modell, ...Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, s[f] - (Number(st.stand?.[f]) || 0)])) });
-  const neu = { sitzung: s.sitzung, stand: Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, s[f]])), auftraege: Object.fromEntries([...Object.entries(st.auftraege).slice(-49), [schluessel, v]]) };
-  try { if (lstatSync(dir).isSymbolicLink()) return null; const t = `${pfad}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify(neu)); renameSync(t, pfad); } catch { return null; }
-  return v;
+  const gueltig = !!st && typeof st === "object" && st.sitzung === s.sitzung && Object.hasOwn(st, "aktuell") && standGueltig(st.basis ?? null) && standGueltig(st.letzter ?? null);
+  if (!gueltig && s.abschluesse > 0) return null; // Stand fehlt, aber diese Sitzung hat schon abgeschlossen bzw. gemeldet: das Delta wäre doppelt
+  const basis = gueltig ? (st.aktuell === schluessel ? st.basis ?? null : st.letzter ?? null) : null;
+  const v = { modell: String(s.modell).slice(0, 80), ...Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, tokenZahl(s[f] - (Number(basis?.summe?.[f]) || 0))])) };
+  let meldung = v;
+  if (leaseRoh()?.messung === 2) try { meldung = { ...v, ...messfelder(e, s, basis, job) }; } catch { meldung = v; } // im Fehlerfall fehlen nur die Messfelder
+  try { if (lstatSync(dir).isSymbolicLink()) return null; const t = `${pfad}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify({ sitzung: s.sitzung, aktuell: schluessel, basis, letzter: standVon(s) })); renameSync(t, pfad); }
+  catch { return null; }
+  return meldung;
 }
-/** A-1007 H: complete_job – verbrauch des Auftrags per updatedInput; ein vom Modell mitgegebener fällt weg (nur der Hook meldet ihn). Weder ermittelt noch mitgegeben → null (wie bisher frei). */
+/** A-1007 H: complete_job – verbrauch des Auftrags per updatedInput; ein vom Modell mitgegebener fällt weg (nur der Hook meldet ihn). Weder ermittelt noch mitgegeben → null (wie bisher frei).
+ *  A-1071 P1: ebenso ask_user – gemeldet nur mit messung 2 und nur ohne dokument_ids (der Aufruf kann den Auftrag anhalten; ob er es tut, entscheidet EXAVA); ein vom Modell mitgegebenes
+ *  verbrauch fällt bei ask_user immer weg (G8). Ein Fehler beim Ermitteln kostet nur das Feld – nie die Entscheidung. */
 export function verbrauchMelden(werkzeug, ti, e) {
-  if (werkzeug !== "complete_job" || !ti || typeof ti !== "object" || Array.isArray(ti)) return null;
-  const { verbrauch: mitgegeben, ...ohne } = ti, v = auftragsVerbrauch(e, ti);
+  if ((werkzeug !== "complete_job" && werkzeug !== "ask_user") || !ti || typeof ti !== "object" || Array.isArray(ti)) return null;
+  const { verbrauch: mitgegeben, ...ohne } = ti;
+  let v = null;
+  if (werkzeug === "complete_job" || (leaseRoh()?.messung === 2 && ohneDokumente(ti))) try { v = auftragsVerbrauch(e, ti); } catch { v = null; }
   if (!v && mitgegeben === undefined) return null;
-  return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "A-1007 H Abo-Verbrauch aus dem Sitzungsprotokoll",
+  return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: `${werkzeug === "complete_job" ? "A-1007 H" : "A-1071"} Abo-Verbrauch aus dem Sitzungsprotokoll`,
     updatedInput: v ? { ...ohne, verbrauch: v } : ohne } }) };
 }
+/** A-1071 P1: ingest_document der Hauptsitzung – ein vom Modell mitgegebenes gelesen_von fällt weg (nur der Hook setzt es, im Helfer x-scan); sonst null (wie bisher frei). */
+const gelesenVonEntfernen = (werkzeug, ti) => werkzeug !== "ingest_document" || !ti || typeof ti !== "object" || Array.isArray(ti) || !Object.hasOwn(ti, "gelesen_von") ? null
+  : { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "A-1071 gelesen_von setzt nur der Hook",
+    updatedInput: Object.fromEntries(Object.entries(ti).filter(([k]) => k !== "gelesen_von")) } }) };
 /** A-901 Lease-Weitergabe: ingest_document aus dem Helfer x-scan nur mit vollständiger Lease des laufenden Auftrags (.exava/lease.json, schreibt nur x-ausfuehrung.mjs nach arbeit_holen)
  *  und nur mit den Feldern des Werkzeugs; job_id, lauf_id, lease_generation und lease_token setzt der Hook per updatedInput (Werte des Helfers werden ersetzt). Profil, Auftrag,
  *  Lease und Quelle prüft der Server (hintergrundBindung, brain_lease_pruefen). Ohne gültige Lease gesperrt (fail closed). */
@@ -484,20 +592,66 @@ const UUID_LEASE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  *  (exklusiv angelegt, nie überschrieben). scanIngest gibt die Lease nur an einen Helfer dieses Auftrags weiter – auch wenn Claude Code einen synchronen Helfer nach 120 s in den
  *  Hintergrund schiebt (CLAUDE_AUTO_BACKGROUND_TASKS), übergibt er nach dem Auftragswechsel nichts unter der Lease des Folgeauftrags. */
 const helferDatei = (agentId) => join(projektDir(), ".exava", `helfer-${createHash("sha256").update(String(agentId)).digest("hex").slice(0, 32)}.json`);
-export function helferBinden(agentId) {
+/** A-1071 P1: die Bindung trägt zusätzlich rolle (agent_type) und stufe (effort.level des ersten Aufrufs) – die Messung zählt daraus Rolle, Starts und Stufe je Helfer. */
+export function helferBinden(agentId, rolle, stufe) {
   const l = leaseRoh();
   if (typeof agentId !== "string" || !agentId || !l || !UUID_LEASE.test(String(l.job_id)) || !existsSync(join(projektDir(), ".exava"))) return;
-  try { writeFileSync(helferDatei(agentId), JSON.stringify({ job_id: l.job_id }), { flag: "wx" }); } catch { /* schon gebunden (EEXIST) oder nicht schreibbar: die erste Bindung gilt */ }
+  const s = stufeVon(stufe);
+  try { writeFileSync(helferDatei(agentId), JSON.stringify({ job_id: l.job_id, ...(HELFER.has(rolle) ? { rolle } : {}), ...(s ? { stufe: s } : {}) }), { flag: "wx" }); } catch { /* schon gebunden (EEXIST) oder nicht schreibbar: die erste Bindung gilt */ }
 }
 export const helferAuftrag = (agentId) => { try { const p = helferDatei(agentId); return typeof agentId === "string" && agentId && lstatSync(p).isFile() ? JSON.parse(readFileSync(p, "utf8"))?.job_id ?? null : null; } catch { return null; } };
+/** A-1071 P1 Leseweg des Helfers x-scan (.exava/lesen-<sha256(agent_id)>.json, der letzte gilt): read_file_content → drive_text (Textauszug von Drive, bei Scans dessen Texterkennung),
+ *  download_file_content → datei, Read nur für einen Pfad unter arbeit/ → datei (ein Read der ausgelagerten Antwort ändert den Weg nicht), get_message → gmail_text; dazu einmal das Modell
+ *  des Helfers aus seinem Protokoll (≤ 256 KiB, erste Antwort mit gültigem message.model, ≤ 300 ms; nicht bestimmbar → beim nächsten Lesewerkzeug erneut). */
+export const LESEWEG = { read_file_content: "drive_text", download_file_content: "datei", get_message: "gmail_text" };
+const AGENT_ID = /^[A-Za-z0-9_-]{4,80}$/, MODELL_NAME = /^[\w.:/-]{1,80}$/;
+const lesenDatei = (agentId) => join(projektDir(), ".exava", `lesen-${createHash("sha256").update(String(agentId)).digest("hex").slice(0, 32)}.json`);
+const unterArbeit = (f) => { if (typeof f !== "string" || !f) return false; const r = relative(projektDir(), resolve(projektDir(), f)); return r.startsWith("arbeit/") && !r.split(/[\\/]/).includes(".."); };
+function helferModell(e) {
+  const t0 = Date.now(), pfad = String(e?.transcript_path ?? ""), sitzung = String(e?.session_id ?? ""), name = `agent-${e.agent_id}.jsonl`;
+  const datei = basename(pfad) === name ? pfad : pfad.endsWith(".jsonl") && /^[A-Za-z0-9_-]{8,80}$/.test(sitzung) ? join(dirname(pfad), sitzung, "subagents", name) : "";
+  if (!datei) return "";
+  let fd;
+  try {
+    if (!lstatSync(datei).isFile()) return "";
+    fd = openSync(datei, "r"); const buf = Buffer.alloc(256 * 1024), n = readSync(fd, buf, 0, buf.length, 0);
+    for (const zeile of buf.subarray(0, n).toString("utf8").split("\n")) {
+      if (Date.now() - t0 > 300) return "";
+      if (!zeile.includes('"assistant"')) continue;
+      let o; try { o = JSON.parse(zeile); } catch { continue; }
+      if (o?.type === "assistant" && typeof o.message?.model === "string" && MODELL_NAME.test(o.message.model)) return o.message.model;
+    }
+  } catch { /* nicht lesbar */ } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* zu */ } }
+  return "";
+}
+/** A-1071 P1: nach jeder Freigabe eines Lesewerkzeugs im Helfer x-scan den Leseweg merken – nur im Hook-Lauf, nur mit .exava, nie über einen Symlink; jeder Fehler wird ignoriert (G7). */
+export function lesewegMerken(e, r) {
+  try {
+    if (!process.env.CLAUDE_PROJECT_DIR || r?.code !== 0 || e?.agent_type !== SCAN_AGENT || !AGENT_ID.test(String(e.agent_id ?? ""))) return;
+    const t = mcpTeile(e.tool_name), w = t ? (Object.hasOwn(LESEWEG, t.werkzeug) ? LESEWEG[t.werkzeug] : null) : e.tool_name === "Read" && unterArbeit(e.tool_input?.file_path) ? "datei" : null;
+    const dir = join(projektDir(), ".exava"), p = lesenDatei(e.agent_id);
+    if (!w || !existsSync(dir) || lstatSync(dir).isSymbolicLink()) return;
+    let alt = null;
+    try { const st = lstatSync(p); if (st.isSymbolicLink()) return; if (st.isFile()) alt = JSON.parse(readFileSync(p, "utf8")); } catch { /* noch keiner */ }
+    const modell = typeof alt?.modell === "string" && MODELL_NAME.test(alt.modell) ? alt.modell : helferModell(e), tmp = `${p}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ weg: w, ...(modell ? { modell } : {}) })); renameSync(tmp, p);
+  } catch { /* nie die Entscheidung ändern */ }
+}
+/** A-1071 P1: gelesen_von für ingest_document aus x-scan – <weg> bzw. <weg>:<modell> aus der Datei des Lesewegs (beim ingest_document wird kein Protokoll gelesen); unbekannt → null. */
+const gelesenVon = (agentId) => {
+  try { if (!AGENT_ID.test(String(agentId ?? ""))) return null; const p = lesenDatei(agentId); if (!lstatSync(p).isFile()) return null;
+    const l = JSON.parse(readFileSync(p, "utf8")), w = Object.values(LESEWEG).includes(l?.weg) ? l.weg : null;
+    return w ? (typeof l.modell === "string" && MODELL_NAME.test(l.modell) ? `${w}:${l.modell}` : w) : null; } catch { return null; }
+};
 export function scanIngest(name, ti, agentId) {
-  const l = leaseRoh();
-  if (!NUR(ti, SCAN_INGEST_FELDER)) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} mit den Feldern des Werkzeugs.`);
+  const l = leaseRoh(), eigen = ti && typeof ti === "object" && !Array.isArray(ti) && Object.hasOwn(ti, "gelesen_von") ? Object.fromEntries(Object.entries(ti).filter(([k]) => k !== "gelesen_von")) : ti; // A-1071 P1: nur der Hook setzt gelesen_von
+  if (!NUR(eigen, SCAN_INGEST_FELDER)) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} mit den Feldern des Werkzeugs.`);
   if (!l || !UUID_LEASE.test(String(l.job_id)) || !UUID_LEASE.test(String(l.lauf_id)) || !Number.isInteger(l.lease_generation) || l.lease_generation < 1 || !/^[A-Za-z0-9_-]{20,200}$/.test(l.lease_token))
     return nein(name, `im Helfer ${SCAN_AGENT} nur mit der Lease des laufenden Auftrags (arbeit_holen).`);
   if (helferAuftrag(agentId) !== l.job_id) return nein(name, `im Helfer ${SCAN_AGENT} nur für den Auftrag, unter dem er gestartet wurde – nach einem Auftragswechsel übergibt er nichts mehr.`); // A-901 Teil 2
+  const g = gelesenVon(agentId);
   return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "A-901 Lease aus .exava/lease.json",
-    updatedInput: { ...ti, job_id: l.job_id, lauf_id: l.lauf_id, lease_generation: l.lease_generation, lease_token: l.lease_token } } }) };
+    updatedInput: { ...eigen, job_id: l.job_id, lauf_id: l.lauf_id, lease_generation: l.lease_generation, lease_token: l.lease_token, ...(g ? { gelesen_von: g } : {}) } } }) };
 }
 /** A-930: EXAVA-Aufruf aus dem Helfer x-drive-batch – nur DRIVE_EXAVA mit dessen Feldern, nur unter der Lease des Auftrags, an den der Helfer gebunden ist; die Lease setzt der Hook. */
 export function driveBatchExava(name, werkzeug, ti, agentId) {
@@ -514,10 +668,17 @@ export function entscheide(roh, { vertrag } = {}) {
   let eingabe;
   try { eingabe = JSON.parse(roh); } catch { return { code: 2, stderr: "Gesperrt (EXAVA-Hintergrund): Hook-Eingabe nicht lesbar." }; }
   if (!eingabe || typeof eingabe !== "object" || typeof eingabe.tool_name !== "string" || !eingabe.tool_name) return { code: 2, stderr: "Gesperrt (EXAVA-Hintergrund): Hook-Eingabe ohne tool_name." };
+  messungMerken(eingabe); // A-1071 P1: Zähler je Auftrag vor der Entscheidung (wirft nie, ändert nichts)
+  const r = entscheideEingabe(eingabe, vertrag);
+  lesewegMerken(eingabe, r); // A-1071 P1: Leseweg des Helfers x-scan nach einer Freigabe (wirft nie, ändert nichts)
+  return r;
+}
+/** Entscheidung für eine gelesene Hook-Eingabe (bis A-1071 der Rumpf von entscheide, unverändert). */
+function entscheideEingabe(eingabe, vertrag) {
   const name = eingabe.tool_name, teile = mcpTeile(name);
   const scan = eingabe.agent_type != null; // A-532: Aufruf aus einem Helfer (agent_type laut Hook-Eingabe); nur x-scan, sonst gesperrt
   if (scan && !HELFER.has(eingabe.agent_type)) return nein(name, `Helfer ${String(eingabe.agent_type).slice(0, 60)} nicht freigegeben (nur ${SCAN_AGENT}, ${TRIAGE_AGENT}).`);
-  if (scan) helferBinden(eingabe.agent_id); // A-901 Teil 2: der erste Aufruf bindet den Helfer an den laufenden Auftrag
+  if (scan) helferBinden(eingabe.agent_id, eingabe.agent_type, eingabe.effort); // A-901 Teil 2: der erste Aufruf bindet den Helfer an den laufenden Auftrag; A-1071: mit Rolle und Stufe
   const ag = eingabe.tool_input; // A-901 Teil 2: nur im Vordergrund und nur mit SCAN_AGENT_FELDER
   if (name === "Agent" || name === "Task") return !scan && NUR(ag, SCAN_AGENT_FELDER) && HELFER.has(ag.subagent_type) && ag.run_in_background === false && typeof ag.prompt === "string" && ag.prompt.trim() !== ""
     ? frei() : nein(name, `nur die Helfer ${SCAN_AGENT}, ${TRIAGE_AGENT} und ${DRIVE_AGENT} mit subagent_type, prompt, description und run_in_background: false (nie im Hintergrund, kein model/effort), aus dem Helfer kein weiterer.`);
@@ -530,7 +691,7 @@ export function entscheide(roh, { vertrag } = {}) {
   if (scan && eingabe.agent_type === SCAN_AGENT && teile.server === EXAVA_SERVER && teile.werkzeug === SCAN_EXAVA) return scanIngest(name, eingabe.tool_input, eingabe.agent_id); // A-901: genau dieses EXAVA-Werkzeug, Lease vom Hook
   if (scan && eingabe.agent_type === DRIVE_AGENT && teile.server === EXAVA_SERVER) return driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id); // A-930
   if (scan && (teile.server === EXAVA_SERVER || teile.server.startsWith("exava") || gesteuert(teile))) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} von „EXAVA Hintergrund“, keine anderen EXAVA- und keine Schreibwerkzeuge.`);
-  if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
+  if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? gelesenVonEntfernen(teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
   if (gesteuert(teile) && !EXAVA_WERKZEUGE.has(teile.werkzeug) && !EXAVA_BEKANNT.has(teile.werkzeug)) return frei(); // A-531 AUSFUEHRUNG: Entscheidung bei x-ausfuehrung.mjs (Lease + Freigabe)
   if (teile.server === "exava") return nein(name, "die normale Verbindung „EXAVA“ ist in der Hintergrundarbeit gesperrt; EXAVA-Werkzeuge nur vom Connector „EXAVA Hintergrund“.");
   let server = teile.server, v;
@@ -541,7 +702,7 @@ export function entscheide(roh, { vertrag } = {}) {
     // EXAVA erzwingt Profil, Lease und Rechte serverseitig (dieser Hook ist dort die zweite Schicht). Jedes andere EXAVA-Werkzeug per UUID bleibt gesperrt.
     if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA && eingabe.agent_type === SCAN_AGENT ? scanIngest(name, eingabe.tool_input, eingabe.agent_id) // A-901: wie EXAVA_WERKZEUGE per UUID
       : eingabe.agent_type === DRIVE_AGENT && Object.hasOwn(DRIVE_EXAVA, teile.werkzeug) ? driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-930
-    if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input);
+    if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? gelesenVonEntfernen(teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length === 0) return fremdLesend(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length !== 1) return nein(name, "capability_missing: Connector mit UUID-Namen, Werkzeug mehrdeutig, gesperrt bis geprüft.");
     server = treffer[0];
@@ -590,6 +751,23 @@ export function blockMerken(zeile) {
     if (lstatSync(dir).isSymbolicLink() || (existsSync(datei) && (lstatSync(datei).isSymbolicLink() || lstatSync(datei).size > BLOCK_DATEI_MAX))) return;
     appendFileSync(datei, zeile + "\n");
   } catch { /* nie den Block ändern */ }
+}
+/** A-1071 P1: .exava/messung.jsonl bleibt klein – darüber wird nichts mehr angehängt (rund 60 Bytes je Aufruf). */
+export const MESSUNG_DATEI_MAX = 512 * 1024;
+/** A-1071 P1: Zähler je Auftrag (Muster blockMerken) – Hauptsitzung (kein agent_type) je Werkzeug außer SubagentHandback { j: job_id der Lease, a: "t", s: effort.level } (nur mit einem der
+ *  fünf Namen); SubagentHandback (mit oder ohne agent_type) { j, a: "r", r: Helfertyp bzw. helfer, z: Länge von tool_input.message } – nur die Länge, nie der Text (G8). Nur im Hook-Lauf,
+ *  nur mit .exava und Lease, nie über einen Symlink, nur anhängen (Hooks laufen parallel); jeder Fehler wird ignoriert – die Entscheidung bleibt (G7). */
+export function messungMerken(e) {
+  try {
+    if (!process.env.CLAUDE_PROJECT_DIR || !e || typeof e !== "object") return;
+    const l = leaseRoh(), dir = join(projektDir(), ".exava"), datei = join(dir, "messung.jsonl");
+    if (!l || !UUID_LEASE.test(String(l.job_id)) || !existsSync(dir) || lstatSync(dir).isSymbolicLink()) return;
+    const m = e.tool_input?.message, s = stufeVon(e.effort);
+    const zeile = e.tool_name === "SubagentHandback" ? { j: l.job_id, a: "r", r: HELFER.has(e.agent_type) ? e.agent_type : "helfer", ...(typeof m === "string" ? { z: m.length } : {}) }
+      : e.agent_type == null && s ? { j: l.job_id, a: "t", s } : null;
+    if (!zeile || (existsSync(datei) && (lstatSync(datei).isSymbolicLink() || lstatSync(datei).size > MESSUNG_DATEI_MAX))) return;
+    appendFileSync(datei, JSON.stringify(zeile) + "\n");
+  } catch { /* nie die Entscheidung ändern */ }
 }
 
 function hauptprogramm() {
