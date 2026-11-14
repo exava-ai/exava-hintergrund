@@ -1,6 +1,6 @@
 ---
 name: x-triage
-description: Sortiert eingegangene Mails vor (A-914) – nur nach Absender, Betreff, Anriss und Anhängen – und gibt je Mail Klasse 1 (Werbung, Newsletter, automatische Meldung), 2 (Information oder Beleg ohne Handlungsbedarf) oder 3 (Handlungs- oder Antwortbedarf, im Zweifel) mit einem Satz Grund zurück. Aufruf nur im Vordergrund (run_in_background: false) mit Postfach und Suche bzw. Thread-IDs aus dem Skill, nie mit der Lease. Schreibt, verschiebt und beantwortet nichts.
+description: "Sortiert eingegangene Mails vor (A-914) – nur nach Absender, Betreff, Anriss und Anhängen – und gibt je Mail Klasse 1 (Werbung, Newsletter, automatische Meldung), 2 (Information oder Beleg ohne Handlungsbedarf) oder 3 (Handlungs- oder Antwortbedarf, im Zweifel) mit einem Satz Grund zurück. Aufruf nur im Vordergrund (run_in_background: false) mit Postfach und Suche bzw. Thread-IDs aus dem Skill, nie mit der Lease. Schreibt, verschiebt und beantwortet nichts."
 model: sonnet
 effort: low
 disallowedTools: Agent, Bash, Edit, Write, NotebookEdit, WebFetch, WebSearch

@@ -1,6 +1,6 @@
 ---
 name: x-postfach-hygiene
-description: Postfach-Hygiene (Kernregeln 10/11/18, art postfach_hygiene) – echte Geschäftsmails aus dem Spam holen und den ganzen Posteingang aufräumen (Claude entscheidet je Thread samt Anhängen, was der Nutzer weder tun noch wissen muss; nur INBOX entfernen); Abmeldungen nur als tägliche Sammel-Karte zur Freigabe; Papierkorb-Schutzschild: kritische Post aus dem Papierkorb ins Archiv. Nichts löschen, nichts senden. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit skill x-postfach-hygiene bzw. art postfach_hygiene.
+description: "Postfach-Hygiene (Kernregeln 10/11/18, art postfach_hygiene) – echte Geschäftsmails aus dem Spam holen und den ganzen Posteingang aufräumen (Claude entscheidet je Thread samt Anhängen, was der Nutzer weder tun noch wissen muss; nur INBOX entfernen); Abmeldungen nur als tägliche Sammel-Karte zur Freigabe; Papierkorb-Schutzschild: kritische Post aus dem Papierkorb ins Archiv. Nichts löschen, nichts senden. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit skill x-postfach-hygiene bzw. art postfach_hygiene."
 effort: medium
 ---
 
