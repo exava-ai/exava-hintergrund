@@ -429,8 +429,9 @@ const tokenZahl = (x) => (Number.isFinite(x) && x > 0 ? Math.min(Math.floor(x), 
 export const STUFEN = new Set(["low", "medium", "high", "xhigh", "max"]);
 const stufeVon = (x) => (typeof x === "string" && STUFEN.has(x) ? x : typeof x?.level === "string" && STUFEN.has(x.level) ? x.level : "");
 const ZAEHLER_MAX = 1_000_000, STAND_TEILE_MAX = 64, TEILE_MAX = 16, HELFER_DATEIEN_MAX = 400;
-/** A-1071 P1: nach dem Lesen des Hauptprotokolls einmal neu lesen, wenn der laufende Aufruf noch fehlt (das Protokoll wird asynchron geschrieben). */
-export const NACHLESEN_MS = 150;
+/** A-1071 P1: nach dem Lesen des Hauptprotokolls neu lesen, solange der laufende Aufruf noch fehlt (das Protokoll wird asynchron geschrieben) – A-1071 Schnitt „unvollständig“: höchstens
+ *  NACHLESEN_MAX Runden je NACHLESEN_MS Warten, jede nur in der ersten Hälfte von VERBRAUCH_MS (schlimmstenfalls 6 × 150 ms; das Budget der Messung bleibt VERBRAUCH_MS, weit unter FRIST_MS). */
+export const NACHLESEN_MS = 150, NACHLESEN_MAX = 6;
 const warten = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* ohne Warten */ } };
 /** A-1071 P1: ein Aufruf ohne dokument_ids (ask_user kann den Auftrag anhalten) – dieselbe Regel für Meldung und frühere Abschlüsse. */
 const ohneDokumente = (ti) => ti?.dokument_ids === undefined;
@@ -481,7 +482,7 @@ function protokollZaehlen(a, text, i, rolle, laufend, ask, start) {
 /** A-1007 H: Token dieser Claude-Sitzung aus dem Sitzungsprotokoll (transcript_path der Hook-Eingabe) und den Protokollen ihrer Helfer (<sitzung>/subagents/*.jsonl, ältere Ablage
  *  agent-*.jsonl derselben Sitzung) – je Antwort (message.id) einmal, nur Antworten mit Mengenangabe (input_tokens und output_tokens als Zahl), nur usage und Modell des
  *  Hauptprotokolls, nie Inhalte; abschluesse = frühere complete_job-Aufrufe dieser Sitzung (ohne den laufenden, tool_use_id). Unlesbar oder über VERBRAUCH_MS → null.
- *  A-1071 P1: dazu teile, zuege, client und unvollstaendig (der laufende Aufruf steht nach einmaligem Nachlesen noch nicht im Hauptprotokoll); mit Messform 2 zählt auch ein früheres ask_user
+ *  A-1071 P1: dazu teile, zuege, client und unvollstaendig (der laufende Aufruf steht auch nach dem Nachlesen noch nicht im Hauptprotokoll); mit Messform 2 zählt auch ein früheres ask_user
  *  ohne dokument_ids als Abschluss (dabei wurde der Stand geschrieben). Gesamtsumme und Hauptmodell wie bisher. */
 export function sitzungsVerbrauch(e, start = Date.now()) {
   const pfad = typeof e?.transcript_path === "string" ? e.transcript_path : "", sitzung = typeof e?.session_id === "string" ? e.session_id : "";
@@ -492,7 +493,7 @@ export function sitzungsVerbrauch(e, start = Date.now()) {
   const leer = () => ({ modell: "", input: 0, output: 0, cache_read: 0, cache_creation: 0, abschluesse: 0, teile: {}, zuege: { gesamt: 0, benachrichtigung: 0, sonstige: 0 }, client: "", vorhanden: false, gesehen: new Set() });
   const haupt = () => { let text; try { text = readFileSync(pfad, "utf8"); } catch { return null; } const a = leer(); return protokollZaehlen(a, text, 0, "haupt", laufend, ask, start) ? a : null; };
   let h = haupt(); if (!h) return null;
-  if (laufend && !h.vorhanden && Date.now() - start < VERBRAUCH_MS / 2) { warten(NACHLESEN_MS); const h2 = haupt(); if (h2) h = h2; } // A-1071: Protokoll läuft nach
+  for (let n = 0; laufend && !h.vorhanden && n < NACHLESEN_MAX && Date.now() - start < VERBRAUCH_MS / 2; n++) { warten(NACHLESEN_MS); const h2 = haupt(); if (!h2) break; h = h2; } // A-1071: Protokoll läuft nach
   const w = leer();
   for (const [n, d] of helfer.entries()) {
     let text; try { text = readFileSync(d, "utf8"); } catch { continue; }
