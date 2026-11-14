@@ -1,6 +1,6 @@
 ---
 name: x-drive-batch
-description: Führt die fertig berechnete Liste eines Ausführungsauftrags aus (job.bezug.nur_ausfuehren, A-930) – Drive-Dateien am Ort auf den Namen aus EXAVA umbenennen und gelesene WhatsApp-Dokumente nach 00-EXAVA/WhatsApp hochladen. Holt die Liste selbst seitenweise (ausfuehrung_liste), liest keine Inhalte, bewertet und benennt nichts selbst. Aufruf nur im Vordergrund (run_in_background: false) mit „Auftrag <job_id> ausführen – erster Aufruf ausfuehrung_liste mit job_id <job_id> und seite 1“, nie mit der Liste oder der Lease – die setzt der Hook.
+description: "Führt die fertig berechnete Liste eines Ausführungsauftrags aus (job.bezug.nur_ausfuehren, A-930) – Drive-Dateien am Ort auf den Namen aus EXAVA umbenennen und gelesene WhatsApp-Dokumente nach 00-EXAVA/WhatsApp hochladen. Holt die Liste selbst seitenweise (ausfuehrung_liste), liest keine Inhalte, bewertet und benennt nichts selbst. Aufruf nur im Vordergrund (run_in_background: false) mit „Auftrag <job_id> ausführen – erster Aufruf ausfuehrung_liste mit job_id <job_id> und seite 1“, nie mit der Liste oder der Lease – die setzt der Hook."
 model: haiku
 effort: medium
 disallowedTools: Agent, Edit, Write, NotebookEdit, WebFetch, WebSearch, mcp__EXAVA_Hintergrund__arbeit_holen, mcp__EXAVA_Hintergrund__complete_job
