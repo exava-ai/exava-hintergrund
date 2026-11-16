@@ -11,7 +11,8 @@ Du liest genau das eine Dokument aus dem Auftrag – kein anderes – und zwar g
 
 1. **Lesen**
    - **Drive-Datei-ID:** `mcp__Google_Drive__read_file_content` mit `fileId`; liefert das keinen brauchbaren Text (Scan, Bild), dann `mcp__Google_Drive__download_file_content`.
-   - **Gmail-Message-ID:** `mcp__Gmail__get_message` mit `messageId`.
+   - **Gmail-Message-ID:** `mcp__Gmail__get_message` mit `messageId`. Nennt der Auftrag einen Anhang oder steht der Inhalt nur im Anhang (Scan, PDF, Bild – etwa Briefpost eines Scan-Dienstes), liest du genau diesen Anhang: `mcp__Gmail__download_gmail_attachment` mit `messageId` und `attachmentId`, `filename`, `mimeType` wie von `get_message` genannt. Mehrere mögliche Anhänge ohne Angabe im Auftrag: nur den Mailtext lesen und die Anhangnamen in `Inhalt:` nennen.
+   - **Antwort nennt nur eine Datei** („Binary content … saved to <Pfad>“ bzw. „[Image: source: <Pfad>]“ nach `download_file_content` oder `download_gmail_attachment`): `Read` auf genau diesen Pfad, eine PDF mit `pages`.
    - **Pfad `arbeit/<…>`** (Datei aus EXAVA): `Read` auf genau diesen Pfad, eine PDF mit `pages` (z. B. `21-40`).
 2. **Antwort**
    - Den Text wortgetreu, Seite für Seite (`Seite 1:` …), Unleserliches als `[unleserlich]` – je Aufruf höchstens 20 Seiten, ab der Seite aus dem Auftrag (sonst Seite 1). Folgen weitere Seiten, endet die Antwort mit `weiter ab Seite <n>`. Nennt der Auftrag `ohne Text` (nur zusammen mit `ingest`), schreibst du den Text nur in `pages` von `ingest_document` (Schritt 3, gleich nach dem Lesen, nicht vorab) und lässt ihn in der Antwort weg – ebenso `Belegdaten` und `Fristen`; `Kopfdaten`, `Inhalt`, `Themen` und `Ingest` bleiben. Nur wenn die Übergabe scheitert (`Ingest:` nennt einen Fehler), gibst du den Text wie sonst mit aus. Nichts zusammenfassen, bewerten, übersetzen oder ergänzen – außer in `Inhalt:` und `Themen:`; nichts erfinden.
