@@ -54,7 +54,7 @@ Reicht der Lauf (60 Minuten) nicht: `complete_job` mit `outcome: partial`, `curs
 `complete_job` mit `outcome`, `counters`, `result_refs` (`evidenz`, `entwurf`; ohne Treffer leer mit `counters.gesichtet` ≥ 1) und `bericht` (Pflicht, höchstens 6.000 Zeichen, keine Base64-Blöcke; Form wie CLAUDE.md „Grundsatz“): Zeile 1 Sofort-Fazit, dann Geprüft (Quellen, Zeitraum) · Gefunden · Offen (mit Grund) · Annahmen. `invalid_evidence` `bericht_…` → kürzen, neuer `idempotency_key`; `permission_denied` → derselbe Abschluss ohne `bericht`; `permission_denied` mit `akteur_rolle` → nicht wiederholen, kein zweiter Abschluss: Auftrag liegen lassen (`routine.md` Schritt 5).
 
 ## 5a. Entscheidungsvorlage
-Mit Entscheidungsbedarf: `complete_job` samt `vorlage`; Entwürfe vorher nach 2.5–2.7 (Dreieck A-906), Optionen nur mit dessen Wirkungen – ausgeführt erst nach Klick.
+Entscheidungsbedarf: `complete_job` samt `vorlage`; Entwürfe vorher nach 2.5–2.7 (Dreieck A-906), Optionen nur mit dessen Wirkungen (Nachricht mit Entwurf) – erst nach Klick.
 
 ## 6. Grenzen
 Grundregeln 3 und 7 in CLAUDE.md; dazu nichts archivieren oder umbenennen, keine Termine, keine Buchung, keine Zahlung, kein DATEV, keine Regeln außer 8a und 8c.
