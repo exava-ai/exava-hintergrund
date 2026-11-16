@@ -24,6 +24,10 @@
 //            A-993b Schritt 6 (Auftrag belegsuche; A-996 auch postfach_hygiene, Schutzschild): mail_archivieren mit selbst_retten → lease.korb_frei (IDs mit Frist, von EXAVA); Gmail search_threads/get_thread/get_message →
 //            Nachrichten mit Label TRASH und Datum ≤ KORB_TAGE Tage → lease.korb_gesehen; untrash_message einer freigegebenen ID → lease.korb_raus; danach INBOX entfernt → lease.korb_fertig.
 //            A-642: Ist das Ergebnis größer als MAX_MCP_OUTPUT_TOKENS, liest der Hook die von Claude Code gespeicherte Ausgabe (<session_id>/tool-results/, gespeicherteAusgabe).
+//            A-1080: Binär-Blöcke (eingebettete Ressource, Bild) legt Claude Code als eigene Datei mcp-<server>-blob-<zeit>-<zufall>.<endung> im selben Ordner ab und meldet nur
+//            „Binary content (…) saved to <pfad>“ bzw. „[Image: source: <pfad>]“ – der Hook liest genau diese Datei (binaerDatei: ein Zeiger, Ordner der Sitzung, Server des Aufrufs,
+//            frisch, reguläre Datei, Grenze; Typ weiter nach Magic Bytes). Ein Drive-Download der Hauptsitzung ohne Datei unter arbeit/ endet nie still: Zeile in
+//            arbeit/hook-blocks.jsonl (Fehler-Radar, nur Kürzel und Form der Antwort) und Hinweis an das Modell (ohneDatei). Originale parallel geladener Dateien: mitLeaseSperre.
 //            A-626 WEB (nur Aufträge aus WEB_ARTEN, A-782): arbeit_holen → lease.web = Web-Adressen aus dem Auftragstext (job.eingabe ohne angehängten Gesprächsverlauf); WebSearch → Adressen der Treffer
 //            (url mit title, nie der Suchtext); WebFetch → der Hook lädt dieselbe Seite selbst (GET, nur HTML, ≤ 4 MiB) und merkt Zieladresse und Links (href) – nie Text aus der
 //            Zusammenfassung des Modells. Höchstens 3.000 Adressen je Auftrag; die Policy lässt WebFetch und curl -o aus dem Web nur dafür zu.
@@ -40,7 +44,7 @@
 //            A-623 FOLGE: Laden (curl -o nach arbeit/, Skills x-eingang und x-ablage) lässt er in genau dieser Form durch – Host und Pfad prüft die Policy (BASH_LADEN, Host aus der Lease).
 // Host fest (A-305: ein Host für alle Kunden) – nie aus einer Datei, die Claude beschreiben kann. Das Silo aus der Lease ist nur Wegweiser (wie im Token).
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -455,33 +459,92 @@ export function gespeicherteAusgabe(eingabe, id, o = {}) {
     return o.length && (typeof o[0].id !== "string" || o[0].id === id) ? o : [];
   } catch { return []; }
 }
+/** A-1080: Binär-Blöcke eines MCP-Ergebnisses (eingebettete Ressource, Bild) legt Claude Code – belegt an 2.1.325 – als eigene Datei unter <Projektordner>/<session_id>/tool-results/
+ *  mcp-<server>-blob-<Zeit in ms>-<zufall>.<endung> ab; die Antwort nennt nur „… Binary content (<typ>, <größe>) saved to <pfad>“ bzw. beim Bild „[Image: source: <pfad> …]“ (der
+ *  Bildblock daneben kann verkleinert sein, die Datei trägt die echten Bytes). Gelesen wird genau diese Datei: genau ein Zeiger in der Antwort, nur im tool-results-Ordner dieser
+ *  Sitzung (dieselbe Ordnerprüfung wie gespeicherteAusgabe), Name mit dem Server dieses Aufrufs, in diesem Aufruf geschrieben (Zeit im Namen höchstens ZEIGER_FRIST_MS alt),
+ *  reguläre Datei ohne Verweis und ohne zweiten Namen, ≤ Grenze. Kein Zeiger → null; sonst { buf } oder { grund } (Kürzel, nie Inhalte). Exportiert für den Test. */
+export const ZEIGER_FRIST_MS = 60_000;
+const ZEIGER = /(?:Binary content \([^"\\]{0,200}?\) saved to |\[Image: source: )(\/[^\s"\\,\]]+)/g;
+const serverGleich = (a, b) => a.toLowerCase().replace(/[\s-]/g, "_") === b.toLowerCase().replace(/[\s-]/g, "_");
+export function binaerDatei(eingabe, o = {}) {
+  const z = [...JSON.stringify(eingabe?.tool_response ?? "").matchAll(ZEIGER)];
+  if (!z.length) return null;
+  if (z.length > 1) return { grund: "zeiger_mehrfach" };
+  const tp = eingabe?.transcript_path, sid = eingabe?.session_id, server = /^mcp__(.+?)__/.exec(String(eingabe?.tool_name ?? ""))?.[1], pfad = z[0][1];
+  if (typeof tp !== "string" || typeof sid !== "string" || !/^[A-Za-z0-9_-]{8,80}$/.test(sid) || !server) return { grund: "zeiger_ohne_sitzung" };
+  if (dirname(pfad) !== join(dirname(tp), sid, "tool-results")) return { grund: "zeiger_fremder_ordner" };
+  const m = /^mcp-([A-Za-z0-9_.-]{1,200})-blob-(\d{12,14})-[0-9a-z]{0,12}\.[a-z0-9]{1,10}$/.exec(basename(pfad));
+  if (!m || !serverGleich(m[1], server)) return { grund: "zeiger_name" };
+  const jetzt = Number.isFinite(o.jetzt) ? o.jetzt : Date.now();
+  if (Number(m[2]) < jetzt - ZEIGER_FRIST_MS || Number(m[2]) > jetzt + 5000) return { grund: "zeiger_veraltet" };
+  try {
+    const st = lstatSync(pfad);
+    if (!st.isFile() || st.nlink > 1 || st.size === 0) return { grund: "zeiger_keine_datei" };
+    return st.size > ORIGINAL_MAX ? { grund: "zeiger_zu_gross" } : { buf: readFileSync(pfad) };
+  } catch { return { grund: "zeiger_keine_datei" }; }
+}
 /** A-608 BELEG-ORIGINAL: im Auftrag belegsuche Drive download_file_content (base64) bzw. Gmail get_message RAW (Anhänge) → Datei unter arbeit/ und SHA-256 in lease.originale
- *  (höchstens ORIGINALE_MAX); A-659: im Auftrag ablage nur die Drive-Datei unter arbeit/ (Prüfsumme per sha256sum, wenn Drive keine sha256Checksum liefert – nie ein Original); sonst nichts (fail closed). */
-function originalMerken(eingabe, env, quelle) {
-  let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
+ *  (höchstens ORIGINALE_MAX); A-659: im Auftrag ablage nur die Drive-Datei unter arbeit/ (Prüfsumme per sha256sum, wenn Drive keine sha256Checksum liefert – nie ein Original); sonst nichts (fail closed).
+ *  A-1080: dritte Quelle bei Drive – die vom Client gemeldete Binärdatei (binaerDatei); sie geht dem Base64-Feld vor (ein Bildblock kann verkleinert sein). Nennt die Antwort einen
+ *  Datei-Datensatz mit ID, muss es die angefragte sein. Rückgabe: null = abgelegt bzw. nicht zuständig, sonst das Kürzel, warum ein Drive-Download keine Datei unter arbeit/ ergab. */
+function originalMerken(eingabe, env, quelle, o = {}) {
+  let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return null; }
   const id = quelle === "drive" ? eingabe.tool_input?.fileId : eingabe.tool_input?.messageId;
   const nurDatei = UMBENENNEN_ARTEN.has(l?.art) && quelle === "drive"; // A-659: Ablage braucht nur die Bytes für die Prüfsumme; A-924 Erweiterung: ebenso das Drive-Fenster (Erstaufnahme)
-  if (!l || (l.art !== "belegsuche" && !SPIEGEL_ARTEN.has(l.art) && !nurDatei) || !leaseLesen(env) || typeof id !== "string" || !/^[A-Za-z0-9_-]{6,120}$/.test(id)) return; // A-846: SPIEGEL_ARTEN
+  if (!l || (l.art !== "belegsuche" && !SPIEGEL_ARTEN.has(l.art) && !nurDatei) || !leaseLesen(env) || typeof id !== "string" || !/^[A-Za-z0-9_-]{6,120}$/.test(id)) return null; // A-846: SPIEGEL_ARTEN
   const objekte = alleObjekte(eingabe.tool_response);
-  if (objekte.some((x) => x.isError === true || x.is_error === true)) return;
+  if (objekte.some((x) => x.isError === true || x.is_error === true)) return null;
   const felder = quelle === "drive" ? ["blob", "data", "base64Content", "content", "contentBase64"] : ["raw"];
   const finden = (liste) => liste.flatMap((x) => felder.map((k) => x[k])).find((v) => typeof v === "string" && v.length >= 16 && v.length <= ORIGINAL_MAX * 1.4 && /^[A-Za-z0-9+/_-]+={0,2}$/.test(v));
-  const b64 = finden(objekte) ?? finden(gespeicherteAusgabe(eingabe, id)); // A-642: über MAX_MCP_OUTPUT_TOKENS steht nur der Pfad in der Antwort
-  if (!b64) return;
-  const bufs = quelle === "drive" ? [Buffer.from(b64, "base64")] : mimeAnhaenge(Buffer.from(b64, "base64").toString("latin1"));
-  if (quelle === "gmail" && !bufs.length) return l.art === "belegsuche" ? rohmailMerken(l, id, Buffer.from(b64, "base64"), env) : undefined; // A-657 GO pdf.py: Belegmail nur als HTML (nur Belegsuche)
+  const z = quelle === "drive" ? binaerDatei(eingabe, o) : null; // A-1080
+  const satzId = objekte.find((x) => typeof x.id === "string" && [x.mimeType, x.title, x.name].some((v) => typeof v === "string"))?.id;
+  const zeiger = z?.buf && (satzId === undefined || satzId === id) ? z.buf : null;
+  const b64 = zeiger ? null : finden(objekte) ?? finden(gespeicherteAusgabe(eingabe, id)); // A-642: über MAX_MCP_OUTPUT_TOKENS steht nur der Pfad in der Antwort
+  if (!zeiger && !b64) return quelle === "drive" ? (z?.buf ? "fremde_id" : z?.grund ?? "kein_inhalt") : null;
+  const bufs = zeiger ? [zeiger] : quelle === "drive" ? [Buffer.from(b64, "base64")] : mimeAnhaenge(Buffer.from(b64, "base64").toString("latin1"));
+  if (quelle === "gmail" && !bufs.length) { if (l.art === "belegsuche") rohmailMerken(l, id, Buffer.from(b64, "base64"), env); return null; } // A-657 GO pdf.py: Belegmail nur als HTML (nur Belegsuche)
   let originale = Array.isArray(l.originale) ? l.originale.filter((x) => x && typeof x.sha256 === "string" && typeof x.datei === "string") : [];
   const vorher = originale.length;
+  let grund = null, abgelegt = 0;
   bufs.forEach((buf, n) => {
     const endung = originalEndung(buf) ?? (nurDatei ? "bin" : null); // A-924 Erweiterung: Office, CSV, Bild ohne Signatur nur für die Prüfsumme (arbeit/drive-<id>.bin), nie ein Original
-    if (!endung || buf.length > ORIGINAL_MAX || originale.length >= ORIGINALE_MAX) return;
+    if (!endung || buf.length > ORIGINAL_MAX || originale.length >= ORIGINALE_MAX) { grund ??= !endung ? "typ" : buf.length > ORIGINAL_MAX ? "zu_gross" : "originale_voll"; return; }
     const datei = quelle === "drive" ? `arbeit/drive-${id}.${endung}` : `arbeit/gmail-${id}-${n + 1}.${endung}`, sha256 = createHash("sha256").update(buf).digest("hex");
     mkdirSync(join(projekt(env), "arbeit"), { recursive: true });
-    if ([join(projekt(env), "arbeit"), join(projekt(env), datei)].some((x) => { try { return lstatSync(x).isSymbolicLink(); } catch { return false; } })) return; // nie über einen Verweis schreiben
-    writeFileSync(join(projekt(env), datei), buf);
+    if ([join(projekt(env), "arbeit"), join(projekt(env), datei)].some((x) => { try { return lstatSync(x).isSymbolicLink(); } catch { return false; } })) { grund ??= "verweis"; return; } // nie über einen Verweis schreiben
+    writeFileSync(join(projekt(env), datei), buf); abgelegt++;
     if (!nurDatei && !originale.some((x) => x.sha256 === sha256 && x.datei === datei)) originale = [...originale, { datei, sha256 }];
   });
   if (originale.length > vorher) leaseSchreiben(env, JSON.stringify({ ...l, originale }));
+  return quelle === "drive" && !abgelegt ? grund ?? "kein_inhalt" : null;
+}
+/** A-1080 (kein stilles Ende): Form einer Werkzeugantwort ohne Inhalte – Blockarten der MCP-Hülle mit Anzahl (nur bekannte Namen), Zahl der Dateizeiger, ob ausgelagert. */
+const BLOCKARTEN = ["text", "image", "resource", "resource_link", "document", "audio"];
+export function antwortForm(r) {
+  const bloecke = Array.isArray(r) ? r : Array.isArray(r?.content) ? r.content : null, roh = JSON.stringify(r ?? ""), zahl = {};
+  for (const b of bloecke ?? []) { const k = BLOCKARTEN.includes(b?.type) ? b.type : "andere"; zahl[k] = (zahl[k] ?? 0) + 1; }
+  const arten = bloecke ? Object.entries(zahl).map(([k, n]) => `${k} ${n}`).join(", ") || "leer" : typeof r === "string" ? "Text" : "Objekt";
+  return `${arten}; Zeiger ${[...roh.matchAll(ZEIGER)].length}${/Output has been saved to /.test(roh) ? "; ausgelagert" : ""}`;
+}
+/** A-907 Fehler-Radar: Grenze von arbeit/hook-blocks.jsonl – wortgleich mit hintergrund-policy.mjs (scripts/test/a642-grosses-original.ts prüft die Gleichheit). */
+export const BLOCK_DATEI_MAX = 64 * 1024;
+/** A-1080 (kein stilles Ende): Ein Drive-Download der Hauptsitzung ohne Datei unter arbeit/ → eine Zeile über den Weg des Fehler-Radars (arbeit/hook-blocks.jsonl, Form wie blockZeile
+ *  der Policy: Zeit, Werkzeug ≤ 64, Grund) und ein Hinweis an das Modell (additionalContext) – nur das Kürzel und die Form der Antwort, nie Inhalte (G8). Ein Helfer (agent_id) liest
+ *  die Datei selbst und meldet nichts. Schreiben nur im Hook-Lauf (CLAUDE_PROJECT_DIR), nie über einen Verweis, nie über BLOCK_DATEI_MAX; ein Fehler dabei ändert nichts (G7). */
+function ohneDatei(eingabe, env, grund, jetzt = new Date()) {
+  if (eingabe?.agent_id != null || eingabe?.agent_type != null) return { code: 0 };
+  try {
+    const dir = join(projekt(env), "arbeit"), datei = join(dir, "hook-blocks.jsonl"), da = (p) => { try { return lstatSync(p); } catch { return null; } };
+    if (env.CLAUDE_PROJECT_DIR) {
+      mkdirSync(dir, { recursive: true });
+      if (!lstatSync(dir).isSymbolicLink() && !(da(datei)?.isSymbolicLink() || da(datei)?.size > BLOCK_DATEI_MAX))
+        appendFileSync(datei, JSON.stringify({ zeit: jetzt.toISOString(), werkzeug: String(eingabe?.tool_name ?? "").replace(/[^\w.:-]/g, "").slice(0, 64) || "?",
+          grund: `Drive-Download ohne abgelegte Datei: ${grund} (Antwortform ${antwortForm(eingabe?.tool_response)})` }) + "\n");
+    }
+  } catch { /* nie den Ablauf ändern */ }
+  return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext:
+    `Hinweis (EXAVA-Ausführung): Aus diesem Drive-Download liegt keine Datei unter arbeit/ (${grund}) – ohne sie kein Upload und keine Prüfsumme. Der Vermerk steht in arbeit/hook-blocks.jsonl: im nächsten heartbeat_job, complete_job oder arbeit_holen mit hook_blocks melden.` } }) };
 }
 /** A-657 GO pdf.py: Mail ohne PDF-/Bild-Anhang → Rohmail (≤ 2 MiB, Grenze von pdf.py) nach arbeit/gmail-<messageId>.eml, SHA-256 in lease.rohmails (höchstens 10) – nur sie darf pdf.py --mail lesen. */
 function rohmailMerken(l, id, buf, env) {
@@ -548,8 +611,9 @@ async function threadMelden(eingabe, env, f) {
   catch { /* Meldung fehlgeschlagen: der Versand wird mit thread_nicht_beobachtet gesperrt (fail closed) */ }
 }
 
-/** PostToolUse: Lease aus arbeit_holen ablegen bzw. einen ausgeführten gesteuerten Aufruf melden. Immer Exit 0 (nach dem Aufruf lässt sich nichts mehr sperren). */
-export async function nachher(eingabe, { env = process.env, f = fetch } = {}) {
+/** PostToolUse: Lease aus arbeit_holen ablegen bzw. einen ausgeführten gesteuerten Aufruf melden. Immer Exit 0 (nach dem Aufruf lässt sich nichts mehr sperren).
+ *  A-1080: `jetzt` (ms) nur für den Test der Zeiger-Frist; stdout trägt allein den Hinweis ohneDatei. */
+export async function nachher(eingabe, { env = process.env, f = fetch, jetzt } = {}) {
   if (eingabe?.tool_name === "WebSearch") { webMerken(env, trefferAdressen(eingabe.tool_response)); return { code: 0 }; } // A-626 WEB
   if (eingabe?.tool_name === "WebFetch") { await seiteMerken(eingabe, env, f); return { code: 0 }; } // A-626 WEB
   if (eingabe?.tool_name === "Bash") { mailPdfMerken(eingabe, env); return { code: 0 }; } // A-657 GO pdf.py
@@ -572,10 +636,10 @@ export async function nachher(eingabe, { env = process.env, f = fetch } = {}) {
   if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "update_file") { mitLeaseSperre(env, () => umbenanntMerken(eingabe, env)); return { code: 0 }; } // A-1050 EINGANG
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "heartbeat_job") { mitLeaseSperre(env, () => namenMerken(eingabe, env)); return { code: 0 }; } // A-924 Erweiterung: Namen zum Umbenennen am Ort
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "ausfuehrung_liste") { mitLeaseSperre(env, () => ausfuehrungMerken(eingabe, env)); return { code: 0 }; } // A-930 (Weg A)
-  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "download_file_content") { originalMerken(eingabe, env, "drive"); return { code: 0 }; } // A-608 BELEG-ORIGINAL
+  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "download_file_content") { const grund = mitLeaseSperre(env, () => originalMerken(eingabe, env, "drive", { jetzt })); return grund ? ohneDatei(eingabe, env, grund) : { code: 0 }; } // A-608 BELEG-ORIGINAL; A-1080: parallel sicher, kein stilles Ende
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "browser_lesen" || t.werkzeug === "browser_beenden")) { uploadHostMerken(eingabe, env); return { code: 0 }; } // A-882: download_url der Eingangsbestätigung (Speicher-Host wie exava_datei_lesen)
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "prepare_file_upload" || t.werkzeug === "exava_datei_lesen")) { mitLeaseSperre(env, () => { uploadHostMerken(eingabe, env); if (t.werkzeug === "exava_datei_lesen") anhangMerken(eingabe, env); }); return { code: 0 }; } // A-818: Prüfsummen der geladenen Dateien; A-930: parallel sicher
-  if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_message" && eingabe.tool_input?.messageFormat === "RAW") { originalMerken(eingabe, env, "gmail"); return { code: 0 }; } // A-608 BELEG-ORIGINAL (Gmail-Anhang)
+  if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_message" && eingabe.tool_input?.messageFormat === "RAW") { mitLeaseSperre(env, () => originalMerken(eingabe, env, "gmail")); return { code: 0 }; } // A-608 BELEG-ORIGINAL (Gmail-Anhang); A-1080: parallel sicher
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "mail_archivieren") { mitLeaseSperre(env, () => korbFreigabeMerken(eingabe, env)); return { code: 0 }; } // A-993b Schritt 6
   if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && ["untrash_message", "unlabel_message", "update_message_labels"].includes(t.werkzeug)) { mitLeaseSperre(env, () => korbSchrittMerken(eingabe, env, t.werkzeug)); return { code: 0 }; } // A-993b Schritt 6
   if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && ["search_threads", "get_thread", "get_message"].includes(t.werkzeug) && korbLease(env)) mitLeaseSperre(env, () => korbGesehenMerken(eingabe, env)); // A-993b Schritt 6 (Sperre nur im Auftrag belegsuche)
@@ -597,7 +661,7 @@ export async function nachher(eingabe, { env = process.env, f = fetch } = {}) {
 
 function hauptprogramm() {
   const modus = process.argv[2] === "post" ? "post" : "pre";
-  const ende = (r) => { if (r.stderr) process.stderr.write(r.stderr); if (r.stdout && modus === "pre" && r.code === 0) return process.stdout.write(r.stdout, () => process.exit(0)); process.exit(modus === "post" ? 0 : r.code); }; // A-615: updatedInput
+  const ende = (r) => { if (r.stderr) process.stderr.write(r.stderr); if (r.stdout && r.code === 0) return process.stdout.write(r.stdout, () => process.exit(0)); process.exit(modus === "post" ? 0 : r.code); }; // A-615: updatedInput; A-1080: post nur der Hinweis ohneDatei
   const absturz = (x) => ende({ code: 2, stderr: `Gesperrt (EXAVA-Ausführung): Hook-Fehler (${String(x?.message ?? x).slice(0, 200)}).` });
   process.on("uncaughtException", absturz); process.on("unhandledRejection", absturz);
   setTimeout(() => ende({ code: 2, stderr: "Gesperrt (EXAVA-Ausführung): Prüfung dauerte zu lange." }), FRIST_MS);

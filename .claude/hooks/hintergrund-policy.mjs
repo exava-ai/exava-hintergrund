@@ -602,9 +602,10 @@ export function helferBinden(agentId, rolle, stufe) {
 }
 export const helferAuftrag = (agentId) => { try { const p = helferDatei(agentId); return typeof agentId === "string" && agentId && lstatSync(p).isFile() ? JSON.parse(readFileSync(p, "utf8"))?.job_id ?? null : null; } catch { return null; } };
 /** A-1071 P1 Leseweg des Helfers x-scan (.exava/lesen-<sha256(agent_id)>.json, der letzte gilt): read_file_content → drive_text (Textauszug von Drive, bei Scans dessen Texterkennung),
- *  download_file_content → datei, Read nur für einen Pfad unter arbeit/ → datei (ein Read der ausgelagerten Antwort ändert den Weg nicht), get_message → gmail_text; dazu einmal das Modell
+ *  download_file_content → datei, Read nur für einen Pfad unter arbeit/ → datei (ein Read der ausgelagerten Antwort ändert den Weg nicht), get_message → gmail_text,
+ *  A-1080: download_gmail_attachment → datei (der Anhang kommt als Datei, wie beim Drive-Download); dazu einmal das Modell
  *  des Helfers aus seinem Protokoll (≤ 256 KiB, erste Antwort mit gültigem message.model, ≤ 300 ms; nicht bestimmbar → beim nächsten Lesewerkzeug erneut). */
-export const LESEWEG = { read_file_content: "drive_text", download_file_content: "datei", get_message: "gmail_text" };
+export const LESEWEG = { read_file_content: "drive_text", download_file_content: "datei", get_message: "gmail_text", download_gmail_attachment: "datei" };
 const AGENT_ID = /^[A-Za-z0-9_-]{4,80}$/, MODELL_NAME = /^[\w.:/-]{1,80}$/;
 const lesenDatei = (agentId) => join(projektDir(), ".exava", `lesen-${createHash("sha256").update(String(agentId)).digest("hex").slice(0, 32)}.json`);
 const unterArbeit = (f) => { if (typeof f !== "string" || !f) return false; const r = relative(projektDir(), resolve(projektDir(), f)); return r.startsWith("arbeit/") && !r.split(/[\\/]/).includes(".."); };
