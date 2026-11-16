@@ -1,7 +1,7 @@
 ---
 name: x-wiki-pflege
 description: Veraltete Wiki-Artikel eines Auftrags (bis zu 20 Partner oder eigene Gesellschaften) neu schreiben – je Subjekt das berechtigte Wissen über read_knowledge lesen und den Artikel nach dem WikiSchema per ingest_wiki mit Compare-and-Swap übergeben; jeder Satz belegt, sonst wird das Subjekt übersprungen. Kein Versand, kein Entwurf, keine Rückfrage. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit profil ingest und skill x-wiki-pflege bzw. art wiki.
-effort: max
+effort: high
 ---
 
 # Wiki-Pflege (Profil ingest)
