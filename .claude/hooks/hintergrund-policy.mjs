@@ -6,7 +6,7 @@
 // ALLOWLIST (alles andere Exit 2 mit Klartext, auch unbekannte Server und Werkzeuge – fail closed):
 //   eingebaut: Read, Glob, Grep, Skill, ToolSearch (lädt aufgeschobene Connector-Werkzeuge), TodoWrite; Bash, Write und Edit nur nach bashPruefen/schreibPruefen (A-531 DATEI),
 //   weil die Shell im Netz „Trusted“ sonst ein Weg nach draußen und an .claude/ vorbei wäre;
-//   A-534 (Kernregeln 9–11): Ablage (Drive am Ort umbenennen – A-924: nie verschieben, nie kopieren –, Ordner anlegen) und Postfach-Hygiene (Spam aufheben, INBOX entfernen) nur mit einer Lease der passenden Auftragsart
+//   A-534 (Kernregeln 9–11): Ablage (Drive am Ort umbenennen – A-924: nie verschieben, nie kopieren; Ortswechsel nur A-1050 aus 00-EXAVA/Eingang und A-1109 für Einträge des Einsammel-Auftrags –, Ordner anlegen) und Postfach-Hygiene (Spam aufheben, INBOX entfernen) nur mit einer Lease der passenden Auftragsart
 //   aus .exava/lease.json (schreibt nur x-ausfuehrung.mjs) und nur in engster Form (hygieneAusnahme); Löschen, Papierkorb, Teilen und Senden bleiben gesperrt;
 //   A-993b Schritt 6 (Bauherr 06.11.2026): im Auftrag belegsuche Gmail nur über den Claude-Connector – untrash_message (nur messageId) für eine von EXAVA freigegebene Nachricht
 //   (lease.korb_frei aus mail_archivieren ohne konto, mit Frist), die x-ausfuehrung.mjs mit Label TRASH und Datum ≤ 14 Tage gesehen hat (lease.korb_gesehen), höchstens KORB_MAX je Lauf;
@@ -237,6 +237,25 @@ export const eingangVerschieben = (ti) => { const l = leaseRoh() ?? {};
   return NUR(ti, ["fileId", "parentId"]) && ID(ti.fileId) && ID(ti.parentId) && typeof l.eingang === "string" && ti.parentId !== l.eingang
     && [l.archiv, l.dubletten].some((z) => typeof z === "string" && z === ti.parentId) && (typeof l.eingang_in !== "string" || typeof l.archiv_in !== "string" || l.eingang_in === l.archiv_in)
     && leaseListe("eingang_dateien").includes(ti.fileId) && leaseListe("umbenannt").includes(ti.fileId) && leaseUngeteilt().includes(ti.fileId); };
+/** A-1109 (Bauherr 18.11.2026, Altordner einsammeln): symbolische Orte eines Einsammel-Eintrags – wortgleich lib/x/connector/symbiose-datei.ts und x-ausfuehrung.mjs (test:a1109-altordner). */
+export const EINSAMMELN_ORTE = ["Archiv", "Archiv/_Dubletten"];
+/** A-1109: Ortswechsel außerhalb von 00-EXAVA/Eingang NUR im Einsammel-Auftrag (lease.einsammeln aus job.bezug.einsammeln) und nur für einen Eintrag der fertigen Liste (lease.verschieben aus
+ *  ausfuehrung_liste; beides schreibt nur x-ausfuehrung.mjs): nur fileId und parentId; parentId = der bestätigte Ordner zu ziel – Archiv bzw. Archiv/_Dubletten (Archiv direkt im bestätigten
+ *  eigenen 00-EXAVA, soweit Drive den Elternordner nennt), in der Rücknahme eine bestätigte eigene Ordner-ID des Auftrags (lease.quellordner); die Datei liegt nachweislich in quelle
+ *  (lease.quell_dateien), heißt in diesem Lauf genau titel (lease.umbenannt) und ist eigen und ungeteilt. Ohne Marker bleibt A-924 (nur am Ort) unverändert. Nie kopieren, nie löschen. */
+export const einsammelnVerschieben = (ti) => { const l = leaseRoh() ?? {}, m = l.einsammeln && typeof l.einsammeln === "object" && !Array.isArray(l.einsammeln) ? l.einsammeln : null;
+  const e = m && Array.isArray(l.verschieben) ? l.verschieben.find((x) => x && x.file_id === ti?.fileId) : undefined, symbol = !!e && EINSAMMELN_ORTE.includes(e.ziel);
+  const ort = (z) => (z === "Archiv" ? l.archiv : z === "Archiv/_Dubletten" ? l.dubletten : leaseListe("quellordner").includes(z) ? z : undefined);
+  return !!e && NUR(ti, ["fileId", "parentId"]) && ID(ti.fileId) && ID(ti.parentId) && (m.ruecknahme === true) !== symbol && typeof ort(e.ziel) === "string" && ti.parentId === ort(e.ziel) && ti.parentId !== ort(e.quelle)
+    && (!symbol || (typeof l.exava === "string" && (typeof l.archiv_in !== "string" || l.archiv_in === l.exava)))
+    && leaseListe("quell_dateien").includes(ti.fileId) && leaseListe("umbenannt").includes(ti.fileId) && leaseUngeteilt().includes(ti.fileId); };
+/** A-1109 Rücknahme: sicherer alter Dateiname (auch ohne Schema) – ≤ 210 Zeichen, ohne / \ < > : " | ? * und Steuerzeichen, ohne Leerraum am Rand, mit lesbarer Endung (UMBENENNEN_ENDUNGEN).
+ *  Dieselbe Prüfung nutzt scripts/betrieb/a1109-altordner-nachlauf.ts für die Rücknahme-Liste. */
+export const rueckNameSicher = (n) => { const s = String(n ?? ""), e = /\.([A-Za-z0-9]{2,5})$/.exec(s)?.[1];
+  return s.length >= 3 && s.length <= 210 && s.trim() === s && !/[/\\<>:"|?*\x00-\x1f]/.test(s) && !!e && UMBENENNEN_ENDUNGEN.includes(e.toLowerCase()); };
+/** A-1109 Rücknahme: am Ort zurück auf den alten Namen nur im Rücknahme-Auftrag (lease.einsammeln.ruecknahme) und nur genau titel eines Eintrags, dessen Datei im Archiv bzw. Archiv/_Dubletten liegt. */
+const rueckName = (fileId, n) => { const l = leaseRoh() ?? {};
+  return l.einsammeln?.ruecknahme === true && Array.isArray(l.verschieben) && l.verschieben.some((x) => x?.file_id === fileId && x.titel === n && EINSAMMELN_ORTE.includes(x.quelle)) && rueckNameSicher(n); };
 /** A-531 COMPLIANCE H2: Hosts der Upload-URLs, die x-ausfuehrung.mjs (PostToolUse) aus der Antwort von prepare_file_upload in die Lease schreibt; sonst leer. */
 export function leaseUploadHosts() { const h = leaseRoh()?.upload_hosts; return Array.isArray(h) ? h.filter((x) => typeof x === "string") : []; }
 /** A-608 BELEG-ORIGINAL: von x-ausfuehrung.mjs gemerkte Originale { datei, sha256 }; sonst leer. */
@@ -356,9 +375,9 @@ export function hygieneAusnahme(server, werkzeug, ti) {
     : werkzeug === "unlabel_message" ? NUR(ti, ["messageId", "labelIds"]) && ID(ti.messageId) && INBOX(ti.labelIds)
     : werkzeug === "unlabel_thread" ? NUR(ti, ["threadId", "labelIds"]) && ID(ti.threadId) && INBOX(ti.labelIds)
     : werkzeug === "update_message_labels" ? NUR(ti, ["messageId", "removeLabelIds"]) && ID(ti.messageId) && INBOX(ti.removeLabelIds)
-    : werkzeug === "update_file" && ti?.parentId !== undefined ? eingangVerschieben(ti) // A-1050 EINGANG: genau die eine Verschiebung 00-EXAVA/Eingang → Archiv bzw. Archiv/_Dubletten
+    : werkzeug === "update_file" && ti?.parentId !== undefined ? eingangVerschieben(ti) || einsammelnVerschieben(ti) // A-1050 EINGANG: genau die eine Verschiebung 00-EXAVA/Eingang → Archiv bzw. Archiv/_Dubletten; A-1109: Einträge des Einsammel-Auftrags
     : werkzeug === "update_file" ? NUR(ti, ["fileId", "name", "title"]) && ID(ti.fileId) && (ti.name === undefined) !== (ti.title === undefined) // A-924 AM ORT: nur umbenennen, kein Elternordner (nie verschieben); A-659 title wie name
-      && inPlaceName(ti.title ?? ti.name) && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name)) // nur genau der Name, den EXAVA geplant hat (job.bezug.umbenennen)
+      && (inPlaceName(ti.title ?? ti.name) || rueckName(ti.fileId, ti.title ?? ti.name)) && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name)) // nur genau der Name, den EXAVA geplant hat (job.bezug.umbenennen); A-1109: Rücknahme auf den alten Namen
       && leaseUngeteilt().includes(ti.fileId) // G7: nur eine eigene, nicht geteilte Datei (get_file_permissions)
     : /\.zip$/i.test(String(ti.base64Content ?? "")) ? NUR(ti, ["title", "parentId", "contentMimeType", "base64Content", "disableConversionToGoogleType"]) && !!leaseDatev() // A-818 (G5): DATEV-Paket nur als Platzhalter
       && ti.base64Content === `@arbeit/${leaseDatev().name}.zip` && String(ti.title).startsWith(`${leaseDatev().name}__#`) && /^__#[0-9a-f]{8}\.zip$/.test(String(ti.title).slice(leaseDatev().name.length)) // (Inhalt, Hash und Größe prüft x-ausfuehrung.mjs)
@@ -373,7 +392,9 @@ export function hygieneAusnahme(server, werkzeug, ti) {
       && (!dub || (typeof leaseRoh()?.archiv === "string" && ti.parentId === leaseRoh().archiv && ti.parents === undefined)) // A-1050: _Dubletten nur direkt im bestätigten Archiv
       && ((ti.title ?? ti.name) === "Eingang" || ti.parentId !== undefined || ti.parents !== undefined); // O1: Archiv nie ohne Elternordner
   const upload = werkzeug === "create_file" && ti.base64Content !== undefined && !/\.zip$/i.test(String(ti.base64Content)); // A-930d: genauer Grund statt der Sammelmeldung (Diagnose im Lauf)
-  const grund = ok ? null : werkzeug === "update_file" && ti?.parentId !== undefined ? "Verschieben nur aus 00-EXAVA/Eingang nach 00-EXAVA/Archiv bzw. Archiv/_Dubletten (Ordner per get_file_permissions und get_file_metadata bestätigt, Datei aus der Liste parentId = '<Eingang>'), nur fileId und parentId, erst nach der Umbenennung auf den Namen aus EXAVA – nie kopieren, nie löschen"
+  const grund = ok ? null : werkzeug === "update_file" && ti?.parentId !== undefined ? (leaseRoh()?.einsammeln
+      ? "Verschieben im Einsammel-Auftrag nur für einen Eintrag aus ausfuehrung_liste und nur nach parentId = Ordner zu ziel: 00-EXAVA, Archiv bzw. _Dubletten und jede Ordner-ID aus quelle/ziel per get_file_permissions und get_file_metadata bestätigt, Datei in quelle gelistet (search_files parentId = '<quelle>' bzw. get_file_metadata), eigen und ungeteilt, erst nach dem Namen = titel; nur fileId und parentId – nie kopieren, nie löschen"
+      : "Verschieben nur aus 00-EXAVA/Eingang nach 00-EXAVA/Archiv bzw. Archiv/_Dubletten (Ordner per get_file_permissions und get_file_metadata bestätigt, Datei aus der Liste parentId = '<Eingang>'), nur fileId und parentId, erst nach der Umbenennung auf den Namen aus EXAVA – nie kopieren, nie löschen")
     : werkzeug === "update_file" && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name))
       ? (leaseUngeteilt().includes(ti.fileId) ? null : "Datei nicht als eigen und ungeteilt bestätigt – erst get_file_permissions; zeigt die Antwort eine Freigabe oder einen fremden Eigentümer: nicht umbenennen, Grund melden")
     : werkzeug === "update_file" ? "nur fileId und title = genau der Name aus EXAVA für diese Datei (titel aus ausfuehrung_liste bzw. job.bezug.umbenennen)"

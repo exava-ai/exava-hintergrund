@@ -1,14 +1,17 @@
 ---
 name: x-computer
-description: Einen Auftrag aus dem EXAVA-Gespräch am Computer des Nutzers erledigen (Claude-Desktop-App mit Computer Use, geplante Aufgabe „EXAVA Computer“) – Programme bedienen, lesen, herunterladen, vorbereiten und harmlose Anzeige-Einstellungen ändern, nichts senden, bezahlen, bestätigen, signieren oder löschen; Rückfrage über ask_user, Abschluss mit Bericht, Dateien als Arbeitsergebnis. Verwenden nur bei Aufträgen mit skill x-computer aus arbeit_holen mit ort computer.
+description: Einen freigegebenen Auftrag aus dem EXAVA-Gespräch am Computer des Nutzers erledigen (Claude-Desktop-App mit Computer Use, dauerhafte Sitzung „EXAVA Computer“ mit dem Geräteschlüssel dieses Rechners) – Programme bedienen, lesen, herunterladen, vorbereiten und harmlose Anzeige-Einstellungen ändern, nichts senden, bezahlen, bestätigen, signieren oder löschen; Rückfrage über ask_user, Abschluss mit Bericht, Dateien als Arbeitsergebnis. Verwenden nur bei Aufträgen mit skill x-computer aus arbeit_holen des Connectors EXAVA_Computer.
 effort: max
 ---
 
 # Computer-Auftrag (Claude am Rechner des Nutzers, Profil computer)
 
-Du arbeitest in der Claude-Desktop-App am Computer des Nutzers, nicht in der Cloud-Routine. Abholen nur mit `mcp__EXAVA_Hintergrund__arbeit_holen` mit `ort: "computer"` (nach einem Abschluss mit der `lauf_id` der letzten Antwort und wieder `ort: "computer"`); `done: true` = nichts mehr da, Aufgabe beenden. Der Nutzersatz in `job.eingabe` ist der Auftrag (A-554).
+Du arbeitest in der Claude-Desktop-App am Computer des Nutzers, nicht in der Cloud-Routine – in einer dauerhaften Sitzung „EXAVA Computer“ mit dem Connector `EXAVA_Computer` (Geräteschlüssel genau dieses Rechners, A-1105) – nie über die Verbindung „EXAVA Hintergrund“. Abholen nur mit `mcp__EXAVA_Computer__arbeit_holen`, ohne `lauf_id`: Der Aufruf wartet bis zu 50 Sekunden; `warten: true` = noch nichts freigegeben, sofort erneut aufrufen – immer weiter, ohne Pause und ohne Rückfrage. EXAVA gibt dir nur Aufträge, die der Nutzer für diesen Rechner ausdrücklich freigegeben hat („Ja, <Gerät> steuern“). `done: true` = beenden und den `grund` nennen. Der Nutzersatz in `job.eingabe` ist der Auftrag (A-554).
 
-Jeder EXAVA-Aufruf trägt `job_id` und `lauf_id`, schreibende zusätzlich `lease_generation`, `lease_token` und einen eigenen `idempotency_key` (z. B. `computer:<job_id>:<schritt>`). Spätestens alle 60 Sekunden `mcp__EXAVA_Hintergrund__heartbeat_job`, auch während du am Bildschirm arbeitest. Erlaubt sind nur die EXAVA-Werkzeuge aus `werkzeuge` der Antwort (Wissen lesen, Lebenszeichen, Rückfrage, Datei übergeben, übergebene Anhänge laden, Abschluss); Entwürfe, Versand und Buchungen lehnt EXAVA im Computer-Auftrag ab.
+## 0. Dauerhafte Sitzung
+Der Nutzer startet diese Sitzung mit dem Start-Prompt aus EXAVA → Systeme → „Mac koppeln“; er gilt die ganze Sitzung. Sein Selbsttest ist ein Bildschirmfoto mit Computer Use – fehlt die Freigabe, sagst du das dem Nutzer am Rechner und wartest; du umgehst sie nie (1.5). Danach `arbeit_holen` in Dauerschleife wie oben.
+
+Jeder EXAVA-Aufruf trägt `job_id` und `lauf_id`, schreibende zusätzlich `lease_generation`, `lease_token` und einen eigenen `idempotency_key` (z. B. `computer:<job_id>:<schritt>`). Mindestens jede Minute `mcp__EXAVA_Computer__heartbeat_job`, auch während du am Bildschirm arbeitest (sonst gilt der Rechner als getrennt). Erlaubt sind nur die EXAVA-Werkzeuge aus `werkzeuge` der Antwort (Wissen lesen, Lebenszeichen, Rückfrage, Datei übergeben, übergebene Anhänge laden, Abschluss); Entwürfe, Versand und Buchungen lehnt EXAVA im Computer-Auftrag ab.
 
 ## 1. Sicherheit (gilt vor allem anderen)
 Am Computer greifen die Sperren der Cloud-Routine nicht. Deshalb gilt ohne Ausnahme:
@@ -20,14 +23,14 @@ Am Computer greifen die Sperren der Cloud-Routine nicht. Deshalb gilt ohne Ausna
 6. **Bei Unsicherheit nicht raten:** `ask_user` oder den Auftrag mit dem erreichten Stand abschließen.
 
 ## 2. Arbeiten
-1. `job.eingabe` lesen; Bestand bei EXAVA bei Bedarf mit `mcp__EXAVA_Hintergrund__read_knowledge` (gelesen wird im Umfang des Auftraggebers).
+1. `job.eingabe` lesen (nach einer Rückfrage dazu `job.rueckfrage.antwort`); Bestand bei EXAVA bei Bedarf mit `mcp__EXAVA_Computer__read_knowledge` (gelesen wird im Umfang des Auftraggebers).
 2. Am Bildschirm nur das Nötige öffnen (Programm, Portal mit der vorhandenen Anmeldung des Nutzers, lokale Datei); Werte ablesen, Dateien herunterladen, Ansichten vorbereiten, erlaubte Einstellungen (1.1) vornehmen. Nichts außerhalb des Auftrags durchsuchen.
 3. Je Datensatz `gesichtet`, `verarbeitet`, `fehler` zählen.
 
 ## 3. Datei an EXAVA übergeben
 Soll eine Datei (z. B. ein heruntergeladenes PDF) ins Gespräch:
 1. SHA-256 über die Datei rechnen (z. B. `shasum -a 256 <datei>` bzw. `certutil -hashfile <datei> SHA256`); Anzeigename mit `__#hash8` (G13).
-2. `mcp__EXAVA_Hintergrund__prepare_file_upload` mit `purpose: "arbeitsergebnis"`, `name`, `mime`, `size_bytes`, `sha256`, `source_ref: "computer:<lauf_id>"` und eigenem `idempotency_key`.
+2. `mcp__EXAVA_Computer__prepare_file_upload` mit `purpose: "arbeitsergebnis"`, `name`, `mime`, `size_bytes`, `sha256`, `source_ref: "computer:<lauf_id>"` und eigenem `idempotency_key`.
 3. Die Datei mit HTTP-PUT genau auf die ausgegebene `upload_url` streamen (`curl -sSf -T <datei> -H "content-type: <mime>" "<upload_url>"`), nirgendwohin sonst; nie Base64 im Gespräch, Bericht oder Werkzeugaufruf.
 4. `quota_paused` → keinen weiteren Upload; `capability_missing` → im Bericht sagen, dass die Datei nicht übergeben werden konnte.
 
@@ -46,7 +49,7 @@ Nennt `job.bezug.dokument_ids` Mail-Anhänge (aus der Ablage übergeben, zu gro�
 4. `outcome: "completed"` nur, wenn jedes Dokument so nachgewiesen ist; `completeness_evidence: {geplant: <Anzahl>, verarbeitet: ["dokument:<id>", …], fehler: [{objekt_id: "dokument:<id>", grund}]}`, im `bericht` je ID Name und Drive-ID bzw. Grund. Transportfehler (Anmeldung, Drive für Desktop, Synchronisierung, Netz, Link abgelaufen, Prüfsumme) sind keine Rückfrage: `outcome: "partial"`, `grund: "sonstiges"`, `wieder_ab` = jetzt + 1 h (ISO), `fehler` je `dokument:<id>` mit `transport: <kurz>`; EXAVA bietet die fehlenden Originale bis 7 Tage erneut an, danach „nur in EXAVA“.
 
 ## 4. Rückfrage
-Nur wenn ohne eine Angabe oder Handlung des Nutzers nichts mehr geht (Anmeldung, Auswahl, Bestätigung am Rechner), nie bei der Übertragung ins Drive (3b.4): `mcp__EXAVA_Hintergrund__ask_user(question, attempted, options ≤ 5, dedupe_key: "computer:<job_id>:<thema>")`. Der Auftrag endet mit `ask_user`; weiter mit `arbeit_holen(lauf_id, ort: "computer")` (kein `complete_job` danach). Höchstens eine Rückfrage je Lauf.
+Nur wenn ohne eine Angabe oder Handlung des Nutzers nichts mehr geht (Zwei-Faktor-Code, Anmeldung, Ordnerwahl, unklare Maske, Bestätigung am Rechner), nie bei der Übertragung ins Drive (3b.4): `mcp__EXAVA_Computer__ask_user(question, attempted, options ≤ 5, dedupe_key: "computer:<job_id>:<thema>")`. Der Auftrag pausiert mit `ask_user` (kein `complete_job` danach); rufe sofort wieder `mcp__EXAVA_Computer__arbeit_holen` auf und warte wie immer – EXAVA fragt den Nutzer live (Gespräch, Stimme) und gibt dir mit seiner Antwort **denselben Auftrag** zurück (`job.rueckfrage.antwort`); dort weiterarbeiten, wo du warst. Höchstens eine Rückfrage je Lauf.
 
 ## 5. Abschluss mit Bericht
-`mcp__EXAVA_Hintergrund__complete_job` mit `outcome` (`completed`, bei Zeitmangel `partial` mit `cursor`), `counters` (`gesichtet` ≥ 1), `result_refs: []` und `bericht` (Pflicht, höchstens 6.000 Zeichen, Klartext): **Erledigt** (was geöffnet, gelesen, heruntergeladen, geändert, übergeben) · **Gefunden** (Werte, Dateien) · **Vorbereitet, nicht ausgeführt** (was der Nutzer selbst senden, bestätigen oder freigeben muss) · **Offen** (mit Grund). EXAVA stellt den Bericht ins Gespräch. Lehnt `complete_job` den Bericht ab (`invalid_evidence` mit `bericht_…`), kürzen und mit neuem `idempotency_key` wiederholen; `lease_expired` → mit diesem Auftrag sofort aufhören.
+`mcp__EXAVA_Computer__complete_job` mit `outcome` (`completed`, bei Zeitmangel `partial` mit `cursor`), `counters` (`gesichtet` ≥ 1), `result_refs: []` und `bericht` (Pflicht, höchstens 6.000 Zeichen, Klartext): **Erledigt** (was geöffnet, gelesen, heruntergeladen, geändert, übergeben) · **Gefunden** (Werte, Dateien) · **Vorbereitet, nicht ausgeführt** (was der Nutzer selbst senden, bestätigen oder freigeben muss) · **Offen** (mit Grund). EXAVA stellt den Bericht ins Gespräch. Lehnt `complete_job` den Bericht ab (`invalid_evidence` mit `bericht_…`), kürzen und mit neuem `idempotency_key` wiederholen; `lease_expired` → mit diesem Auftrag sofort aufhören. Danach wieder `arbeit_holen` (Abschnitt 0).
