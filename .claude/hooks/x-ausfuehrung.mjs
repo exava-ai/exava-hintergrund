@@ -254,7 +254,9 @@ function archivMerken(eingabe, env) {
 }
 /** A-1050 EINGANG: Liste des bestätigten Ordners 00-EXAVA/Eingang – search_files mit genau „parentId = '<lease.eingang>'“ (optional „and trashed = false“) ohne Fehler: die Dateien der
  *  Antwort (mit Name und MIME, keine Ordner) → lease.eingang_dateien (die letzten 200); jede andere Abfrage zählt nicht (fail closed). A-1109: dieselbe Form mit dem bestätigten Quellordner
- *  eines Einsammel-Eintrags (einsammelnOrt) → genau die gelisteten Dateien dieser Einträge nach lease.quell_dateien (die letzten 300). */
+ *  eines Einsammel-Eintrags (einsammelnOrt) → genau die gelisteten Dateien dieser Einträge nach lease.quell_dateien (die letzten 300).
+ *  A-1109b: Liegt die Liste über der Grenze von Claude Code (76 Scans mit Snippets ≈ 90.000 Zeichen), trägt die Antwort nur dessen Zeiger – dann zählt die Liste aus genau dieser Datei
+ *  (ausgelagerteListe); sonst fehlte jede Datei, die nicht zusätzlich per get_file_metadata bestätigt ist, und der Ortswechsel bliebe gesperrt. */
 export const EINGANG_ABFRAGE = /^\s*parentId\s*=\s*'([A-Za-z0-9_-]{6,200})'(?:\s+and\s+trashed\s*=\s*false)?\s*$/;
 function eingangListeMerken(eingabe, env) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
@@ -262,7 +264,7 @@ function eingangListeMerken(eingabe, env) {
   if (!l || !UMBENENNEN_ARTEN.has(l.art) || !leaseLesen(env) || !m) return;
   const ein = typeof l.eingang === "string" && m[1] === l.eingang, quelle = leaseVerschieben(l).filter((x) => einsammelnOrt(l, x.quelle) === m[1]).map((x) => x.file_id); // A-1109: Liste eines bestätigten Quellordners
   if (!ein && !quelle.length) return;
-  const o = alleObjekte(eingabe.tool_response);
+  const eingebettet = alleObjekte(eingabe.tool_response), o = eingebettet.some((x) => typeof x.id === "string") ? eingebettet : [...eingebettet, ...ausgelagerteListe(eingabe)]; // A-1109b
   if (o.some((x) => x.isError === true || x.is_error === true)) return;
   const ids = [...new Set(o.filter((x) => typeof x.id === "string" && /^[A-Za-z0-9_-]{6,200}$/.test(x.id) && x.id !== m[1] && typeof x.mimeType === "string"
     && x.mimeType !== "application/vnd.google-apps.folder" && typeof (x.name ?? x.title) === "string").map((x) => x.id))];
@@ -324,7 +326,8 @@ function namenMerken(eingabe, env) {
   leaseSchreiben(env, JSON.stringify({ ...l, umbenennen: [...alt, ...liste].slice(-300) }));
 }
 /** A-930 (Weg A): ausfuehrung_liste – Einträge der Seite (von EXAVA, nie vom Modell): Umbenennungen nach lease.umbenennen, WhatsApp-Dokumente nach lease.whatsapp_ids (je die letzten 300 bzw. 150);
- *  A-1109: im Einsammel-Auftrag Einträge verschieben nach lease.verschieben (die letzten 150), ihr titel zusätzlich nach lease.umbenennen. */
+ *  A-1109: im Einsammel-Auftrag Einträge verschieben nach lease.verschieben (die letzten 150), ihr titel zusätzlich nach lease.umbenennen. A-1109b: ist ihr Quell- bzw. Zielordner schon vor
+ *  der Liste per get_file_permissions als eigen bestätigt (lease.ordner), zählt er als bestätigter Ordner des Auftrags (lease.quellordner) – die Reihenfolge der Aufrufe zählt nicht. */
 function ausfuehrungMerken(eingabe, env) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
   if (!l || l.art !== "ablage" || !leaseLesen(env) || alleObjekte(eingabe.tool_response).some((x) => x.isError === true || x.is_error === true)) return;
@@ -333,8 +336,9 @@ function ausfuehrungMerken(eingabe, env) {
   const um = umbenennenAus([...eintraege.filter((x) => x?.art === "umbenennen"), ...vs]), wa = eintraege.filter((x) => x?.art === "whatsapp" && typeof x.dokument_id === "string" && UUID.test(x.dokument_id)).map((x) => x.dokument_id.toLowerCase());
   if (!um.length && !wa.length) return;
   const alt = umbenennenAus(l.umbenennen).filter((x) => !um.some((y) => y.file_id === x.file_id)), waAlt = (Array.isArray(l.whatsapp_ids) ? l.whatsapp_ids : []).filter((x) => typeof x === "string" && !wa.includes(x));
+  const qo = liste(l, "quellordner"), dazu = [...new Set(vs.flatMap((x) => [x.quelle, x.ziel]))].filter((z) => liste(l, "ordner").includes(z) && !qo.includes(z)); // A-1109b: vor der Liste bestätigter eigener Ordner (lease.ordner)
   leaseSchreiben(env, JSON.stringify({ ...l, umbenennen: [...alt, ...um].slice(-300), whatsapp_ids: [...waAlt, ...wa].slice(-150),
-    ...(vs.length ? { verschieben: [...leaseVerschieben(l).filter((x) => !vs.some((y) => y.file_id === x.file_id)), ...vs].slice(-150) } : {}) })); // A-1109: Name nach lease.umbenennen, Ort nach lease.verschieben
+    ...(vs.length ? { verschieben: [...leaseVerschieben(l).filter((x) => !vs.some((y) => y.file_id === x.file_id)), ...vs].slice(-150) } : {}), ...(dazu.length ? { quellordner: [...qo, ...dazu].slice(-50) } : {}) })); // A-1109: Name nach lease.umbenennen, Ort nach lease.verschieben
 }
 /** A-993b Schritt 6: Papierkorb der letzten KORB_TAGE Tage, höchstens KORB_MAX Rettungen je Lauf – wortgleich lib/postfach/einreihen.ts KORB_TAGE, KORB_MAX in hintergrund-policy.mjs. */
 export const KORB_TAGE = 14, KORB_MAX = 10;
@@ -474,7 +478,8 @@ export function mimeAnhaenge(roh, tiefe = 0, out = []) {
  *  „Output has been saved to <pfad>“. Gelesen wird genau diese Datei: nur in diesem Ordner, reguläre Datei ohne Verweis, ≤ Grenze, `id` der Antwort = angefragte ID; sonst [].
  *  A-1071 P1: nur mit o.vollForm (Lease aus arbeit_holen) auch die zweite Meldeform „persisted-output … Full output saved to: <pfad>“ – dieselben Prüfungen; die heutigen Aufrufer unverändert. */
 export function gespeicherteAusgabe(eingabe, id, o = {}) {
-  const roh = JSON.stringify(eingabe?.tool_response ?? ""), m = /Output has been saved to (\/[^\s"\\]+\.txt)/.exec(roh) ?? (o.vollForm === true ? /Full output saved to: (\/[^\s"\\]+\.txt)/.exec(roh) : null);
+  const roh = JSON.stringify(eingabe?.tool_response ?? ""), m = typeof o.pfad === "string" ? [o.pfad, o.pfad] // A-1109b: Pfad schon verankert gelesen (ausgelagerteListe)
+    : /Output has been saved to (\/[^\s"\\]+\.txt)/.exec(roh) ?? (o.vollForm === true ? /Full output saved to: (\/[^\s"\\]+\.txt)/.exec(roh) : null);
   const tp = eingabe?.transcript_path, sid = eingabe?.session_id;
   if (!m || typeof tp !== "string" || typeof sid !== "string" || !/^[A-Za-z0-9_-]{8,80}$/.test(sid)) return [];
   if (dirname(m[1]) !== join(dirname(tp), sid, "tool-results") || !/^mcp-[A-Za-z0-9_.-]{1,200}\.txt$/.test(basename(m[1]))) return [];
@@ -484,6 +489,14 @@ export function gespeicherteAusgabe(eingabe, id, o = {}) {
     const o = alleObjekte(readFileSync(m[1], "utf8"));
     return o.length && (typeof o[0].id !== "string" || o[0].id === id) ? o : [];
   } catch { return []; }
+}
+/** A-1109b: Zeiger von Claude Code auf eine ausgelagerte Antwort – nur am Anfang des einzigen Textes (beide Meldeformen), nie aus Inhalten wie Dateinamen oder der Vorschau (G8). */
+export const ZEIGER_ANFANG = /^(?:Error: result \([\d,.]{1,20} characters\) exceeds maximum allowed tokens\. Output has been saved to |<persisted-output>\r?\nOutput too large \([^)\r\n]{1,40}\)\. Full output saved to: )(\/[^\s"\\]+\.txt)/;
+/** A-1109b: ausgelagerte Liste (search_files) – Objekte aus genau der Datei des verankerten Zeigers mit den Prüfungen von gespeicherteAusgabe (Ordner dieser Sitzung, reguläre Datei, Grenze); sonst []. */
+function ausgelagerteListe(eingabe) {
+  const r = eingabe?.tool_response, b = Array.isArray(r) ? r : Array.isArray(r?.content) ? r.content : null;
+  const m = ZEIGER_ANFANG.exec(typeof r === "string" ? r : b?.length === 1 && b[0]?.type === "text" && typeof b[0].text === "string" ? b[0].text : "");
+  return m ? gespeicherteAusgabe(eingabe, null, { pfad: m[1] }) : [];
 }
 /** A-1080: Binär-Blöcke eines MCP-Ergebnisses (eingebettete Ressource, Bild) legt Claude Code – belegt an 2.1.325 – als eigene Datei unter <Projektordner>/<session_id>/tool-results/
  *  mcp-<server>-blob-<Zeit in ms>-<zufall>.<endung> ab; die Antwort nennt nur „… Binary content (<typ>, <größe>) saved to <pfad>“ bzw. beim Bild „[Image: source: <pfad> …]“ (der
