@@ -242,13 +242,29 @@ export const EINSAMMELN_ORTE = ["Archiv", "Archiv/_Dubletten"];
 /** A-1109: Ortswechsel außerhalb von 00-EXAVA/Eingang NUR im Einsammel-Auftrag (lease.einsammeln aus job.bezug.einsammeln) und nur für einen Eintrag der fertigen Liste (lease.verschieben aus
  *  ausfuehrung_liste; beides schreibt nur x-ausfuehrung.mjs): nur fileId und parentId; parentId = der bestätigte Ordner zu ziel – Archiv bzw. Archiv/_Dubletten (Archiv direkt im bestätigten
  *  eigenen 00-EXAVA, soweit Drive den Elternordner nennt), in der Rücknahme eine bestätigte eigene Ordner-ID des Auftrags (lease.quellordner); die Datei liegt nachweislich in quelle
- *  (lease.quell_dateien), heißt in diesem Lauf genau titel (lease.umbenannt) und ist eigen und ungeteilt. Ohne Marker bleibt A-924 (nur am Ort) unverändert. Nie kopieren, nie löschen. */
-export const einsammelnVerschieben = (ti) => { const l = leaseRoh() ?? {}, m = l.einsammeln && typeof l.einsammeln === "object" && !Array.isArray(l.einsammeln) ? l.einsammeln : null;
-  const e = m && Array.isArray(l.verschieben) ? l.verschieben.find((x) => x && x.file_id === ti?.fileId) : undefined, symbol = !!e && EINSAMMELN_ORTE.includes(e.ziel);
-  const ort = (z) => (z === "Archiv" ? l.archiv : z === "Archiv/_Dubletten" ? l.dubletten : leaseListe("quellordner").includes(z) ? z : undefined);
-  return !!e && NUR(ti, ["fileId", "parentId"]) && ID(ti.fileId) && ID(ti.parentId) && (m.ruecknahme === true) !== symbol && typeof ort(e.ziel) === "string" && ti.parentId === ort(e.ziel) && ti.parentId !== ort(e.quelle)
-    && (!symbol || (typeof l.exava === "string" && (typeof l.archiv_in !== "string" || l.archiv_in === l.exava)))
-    && leaseListe("quell_dateien").includes(ti.fileId) && leaseListe("umbenannt").includes(ti.fileId) && leaseUngeteilt().includes(ti.fileId); };
+ *  (lease.quell_dateien), heißt in diesem Lauf genau titel (lease.umbenannt) und ist eigen und ungeteilt. Ohne Marker bleibt A-924 (nur am Ort) unverändert. Nie kopieren, nie löschen.
+ *  A-1109b: dieselben Bedingungen einzeln (einsammelnFehlt) – null = frei, sonst die erste fehlende samt nötigem Schritt als Sperrgrund, damit die Routine sie im selben Lauf nachholt. */
+const bestaetigen = (z) => (z === "Archiv" ? "zuerst get_file_permissions, dann get_file_metadata (nur fileId) für den eigenen Ordner Archiv in 00-EXAVA"
+  : z === "Archiv/_Dubletten" ? "zuerst get_file_permissions, dann get_file_metadata (nur fileId) für _Dubletten im bestätigten Archiv (fehlt er: create_file nur mit title \"_Dubletten\", Ordner-MIME und parentId = Archiv)"
+  : `zuerst get_file_permissions (nur fileId) für den Ordner ${z}`);
+export const einsammelnFehlt = (ti) => { const l = leaseRoh() ?? {}, m = l.einsammeln && typeof l.einsammeln === "object" && !Array.isArray(l.einsammeln) ? l.einsammeln : null;
+  if (!m) return "kein Einsammel-Auftrag (Marker aus arbeit_holen)";
+  if (!NUR(ti, ["fileId", "parentId"]) || !ID(ti.fileId) || !ID(ti.parentId)) return "nur fileId und parentId (umbenennen vorher als eigener Aufruf nur mit fileId und title)";
+  const e = Array.isArray(l.verschieben) ? l.verschieben.find((x) => x && x.file_id === ti.fileId) : undefined, symbol = !!e && EINSAMMELN_ORTE.includes(e.ziel);
+  const ort = (z) => (z === "Archiv" ? l.archiv : z === "Archiv/_Dubletten" ? l.dubletten : leaseListe("quellordner").includes(z) ? z : undefined), f = ti.fileId;
+  if (!e) return `${f} ist kein Eintrag verschieben dieses Auftrags – erst ausfuehrung_liste mit der Seite dieses Eintrags`;
+  if ((m.ruecknahme === true) === symbol) return `Richtung des Eintrags ${f} passt nicht zum Auftrag`;
+  if (symbol && typeof l.exava !== "string") return "00-EXAVA nicht bestätigt: zuerst get_file_permissions, dann get_file_metadata (nur fileId) für den eigenen Ordner 00-EXAVA";
+  if (typeof ort(e.ziel) !== "string") return `Zielordner zu ziel ${e.ziel} nicht bestätigt: ${bestaetigen(e.ziel)}`;
+  if (symbol && typeof l.archiv_in === "string" && l.archiv_in !== l.exava) return "Archiv liegt nicht direkt im bestätigten 00-EXAVA: get_file_metadata (nur fileId) für das Archiv in genau diesem 00-EXAVA";
+  if (ti.parentId !== ort(e.ziel)) return `parentId für ${f} muss ${ort(e.ziel)} sein (Ordner zu ziel ${e.ziel})`;
+  if (ti.parentId === ort(e.quelle)) return `Quelle und Ziel von ${f} sind derselbe Ordner`;
+  if (!leaseListe("quell_dateien").includes(f)) return typeof ort(e.quelle) !== "string" ? `Quellordner zu quelle ${e.quelle} nicht bestätigt: ${bestaetigen(e.quelle)}, dann die Liste`
+    : `${f} nicht in quelle gelistet: search_files mit genau query parentId = '${ort(e.quelle)}' und excludeContentSnippets: true (alle Seiten) oder get_file_metadata nur mit fileId ${f}`;
+  if (!leaseUngeteilt().includes(f)) return `${f} nicht als eigen und ungeteilt bestätigt: zuerst get_file_permissions (nur fileId); Freigabe oder fremder Eigentümer → nicht verschieben, Grund melden`;
+  if (!leaseListe("umbenannt").includes(f)) return `${f} heißt in diesem Lauf noch nicht titel: zuerst update_file nur mit fileId und title = titel (heißt sie schon so: get_file_metadata nur mit fileId)`;
+  return null; };
+export const einsammelnVerschieben = (ti) => einsammelnFehlt(ti) === null;
 /** A-1109 Rücknahme: sicherer alter Dateiname (auch ohne Schema) – ≤ 210 Zeichen, ohne / \ < > : " | ? * und Steuerzeichen, ohne Leerraum am Rand, mit lesbarer Endung (UMBENENNEN_ENDUNGEN).
  *  Dieselbe Prüfung nutzt scripts/betrieb/a1109-altordner-nachlauf.ts für die Rücknahme-Liste. */
 export const rueckNameSicher = (n) => { const s = String(n ?? ""), e = /\.([A-Za-z0-9]{2,5})$/.exec(s)?.[1];
@@ -393,7 +409,7 @@ export function hygieneAusnahme(server, werkzeug, ti) {
       && ((ti.title ?? ti.name) === "Eingang" || ti.parentId !== undefined || ti.parents !== undefined); // O1: Archiv nie ohne Elternordner
   const upload = werkzeug === "create_file" && ti.base64Content !== undefined && !/\.zip$/i.test(String(ti.base64Content)); // A-930d: genauer Grund statt der Sammelmeldung (Diagnose im Lauf)
   const grund = ok ? null : werkzeug === "update_file" && ti?.parentId !== undefined ? (leaseRoh()?.einsammeln
-      ? "Verschieben im Einsammel-Auftrag nur für einen Eintrag aus ausfuehrung_liste und nur nach parentId = Ordner zu ziel: 00-EXAVA, Archiv bzw. _Dubletten und jede Ordner-ID aus quelle/ziel per get_file_permissions und get_file_metadata bestätigt, Datei in quelle gelistet (search_files parentId = '<quelle>' bzw. get_file_metadata), eigen und ungeteilt, erst nach dem Namen = titel; nur fileId und parentId – nie kopieren, nie löschen"
+      ? `Verschieben im Einsammel-Auftrag gesperrt – ${einsammelnFehlt(ti)}; danach denselben Aufruf wiederholen (nur fileId und parentId) – nie kopieren, nie löschen` // A-1109b: erste fehlende Bedingung samt Schritt
       : "Verschieben nur aus 00-EXAVA/Eingang nach 00-EXAVA/Archiv bzw. Archiv/_Dubletten (Ordner per get_file_permissions und get_file_metadata bestätigt, Datei aus der Liste parentId = '<Eingang>'), nur fileId und parentId, erst nach der Umbenennung auf den Namen aus EXAVA – nie kopieren, nie löschen")
     : werkzeug === "update_file" && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name))
       ? (leaseUngeteilt().includes(ti.fileId) ? null : "Datei nicht als eigen und ungeteilt bestätigt – erst get_file_permissions; zeigt die Antwort eine Freigabe oder einen fremden Eigentümer: nicht umbenennen, Grund melden")
