@@ -461,6 +461,11 @@ const startAdresse = (name, werkzeug, ti) => werkzeug !== "browser_starten" || (
 /** A-1007 H: Zeitbudget für das Lesen der Sitzungsprotokolle – deutlich unter FRIST_MS, damit complete_job nie an der Frist scheitert (zu spät → ohne verbrauch). */
 export const VERBRAUCH_MS = 4000;
 const VERBRAUCH_FELDER = ["input", "output", "cache_read", "cache_creation"], VERBRAUCH_MAX = 700_000_000;
+/** A-1119 (Preisfelder, Vertrag ABO_VERBRAUCH): je Antwort die Cache-Anlage nach TTL (usage.cache_creation.ephemeral_5m/1h_input_tokens), Websuchen und Abrufe
+ *  (usage.server_tool_use.web_search_requests/web_fetch_requests); je Teil dazu die Teilmengen schnell (usage.speed „fast“) und lang (übrige Antworten mit mehr als LANG_PROMPT
+ *  Prompt-Token = Eingabe + Cache-Lesen + Cache-Anlage – die Grenze der Preistabelle, LANG_PROMPT_GRENZE in lib/sprache/kosten.ts, scripts/test/a1119-kostentransparenz.ts prüft
+ *  die Gleichheit). Nur Zahlen. Gemeldet nur, wenn die Lease preisfelder: 1 trägt (sonst kennt der Server sie nicht und verwürfe die ganze Meldung). */
+export const PREIS_FELDER = ["cache_5m", "cache_1h", "websuche", "webabruf"], MENGEN_FELDER = ["input", "output", "cache_read", "cache_creation", "cache_5m", "cache_1h"], LANG_PROMPT = 100_000;
 const tokenZahl = (x) => (Number.isFinite(x) && x > 0 ? Math.min(Math.floor(x), VERBRAUCH_MAX) : 0);
 /** A-1071 P1: Denkstufen wie X_DENKSTUFEN in lib/x/einstellungen.ts (scripts/test/a1071-abo-messung.ts prüft die Gleichheit); Stufe aus einem Namen oder { level } – sonst "". */
 export const STUFEN = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -474,7 +479,8 @@ const warten = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer
 const ohneDokumente = (ti) => ti?.dokument_ids === undefined;
 const abschlussAufruf = (b, ask) => /complete_job$/.test(String(b?.name ?? "")) || (ask && /ask_user$/.test(String(b?.name ?? "")) && ohneDokumente(b.input));
 const teilVon = (teile, rolle, modell, stufe, stufe_zug) => { const k = [rolle, modell, stufe, stufe_zug].join("|");
-  return (teile[k] ??= { rolle, modell, stufe, stufe_zug, input: 0, output: 0, cache_read: 0, cache_creation: 0, denken: 0, antworten: 0, eingabe_erste: 0 }); };
+  return (teile[k] ??= { rolle, modell, stufe, stufe_zug, input: 0, output: 0, cache_read: 0, cache_creation: 0, denken: 0, antworten: 0, eingabe_erste: 0, cache_5m: 0, cache_1h: 0, websuche: 0, webabruf: 0 }); };
+const mengenLeer = () => Object.fromEntries(MENGEN_FELDER.map((f) => [f, 0]));
 /** A-1071 P1: Zug = Prompt-Zeile des Hauptprotokolls (type user) ohne tool_result, ohne isMeta (Skill-Inhalte), ohne isCompactSummary; Benachrichtigung = origin.kind task-notification, sonstige = ohne origin.kind. */
 const zugZaehlen = (a, o) => {
   if (o?.type !== "user" || o.isMeta === true || o.isCompactSummary === true || (Array.isArray(o.message?.content) && o.message.content.some((b) => b?.type === "tool_result"))) return;
@@ -512,6 +518,12 @@ function protokollZaehlen(a, text, i, rolle, laufend, ask, start) {
     const t = teilVon(a.teile, rolle, modell, stufeVon(o.effort), stufeVon(o.perTurnEffort));
     for (const f of VERBRAUCH_FELDER) t[f] += z[f];
     t.denken += tokenZahl(u.output_tokens_details?.thinking_tokens); t.antworten++;
+    // A-1119: Preisfelder dieser Antwort – fehlt die TTL-Aufteilung, bleibt sie 0 und die Summe ergibt nicht die Cache-Anlage (EXAVA: TTL unbekannt, kein Gegenwert)
+    const cc = u.cache_creation && typeof u.cache_creation === "object" ? u.cache_creation : null, st = u.server_tool_use && typeof u.server_tool_use === "object" ? u.server_tool_use : null;
+    const p = { cache_5m: tokenZahl(cc?.ephemeral_5m_input_tokens), cache_1h: tokenZahl(cc?.ephemeral_1h_input_tokens), websuche: tokenZahl(st?.web_search_requests), webabruf: tokenZahl(st?.web_fetch_requests) };
+    for (const f of PREIS_FELDER) { a[f] += p[f]; t[f] += p[f]; }
+    const klasse = u.speed === "fast" ? "schnell" : z.input + z.cache_read + z.cache_creation > LANG_PROMPT ? "lang" : null;
+    if (klasse) { const sub = (t[klasse] ??= mengenLeer()), w = { ...z, cache_5m: p.cache_5m, cache_1h: p.cache_1h }; for (const f of MENGEN_FELDER) sub[f] += w[f]; }
     if (erste) { t.eingabe_erste += z.input + z.cache_read + z.cache_creation; erste = false; }
   }
   return true;
@@ -527,7 +539,7 @@ export function sitzungsVerbrauch(e, start = Date.now()) {
   const ordner = dirname(pfad), helfer = [], laufend = typeof e?.tool_use_id === "string" ? e.tool_use_id : null, ask = leaseRoh()?.messung === 2;
   try { for (const f of readdirSync(join(ordner, sitzung, "subagents"))) if (f.endsWith(".jsonl")) helfer.push(join(ordner, sitzung, "subagents", f)); } catch { /* ohne Helfer */ }
   try { for (const f of readdirSync(ordner)) if (/^agent-[\w-]+\.jsonl$/.test(f)) helfer.push(join(ordner, f)); } catch { /* ohne ältere Ablage */ }
-  const leer = () => ({ modell: "", input: 0, output: 0, cache_read: 0, cache_creation: 0, abschluesse: 0, teile: {}, zuege: { gesamt: 0, benachrichtigung: 0, sonstige: 0 }, client: "", vorhanden: false, gesehen: new Set() });
+  const leer = () => ({ modell: "", input: 0, output: 0, cache_read: 0, cache_creation: 0, cache_5m: 0, cache_1h: 0, websuche: 0, webabruf: 0, abschluesse: 0, teile: {}, zuege: { gesamt: 0, benachrichtigung: 0, sonstige: 0 }, client: "", vorhanden: false, gesehen: new Set() });
   const haupt = () => { let text; try { text = readFileSync(pfad, "utf8"); } catch { return null; } const a = leer(); return protokollZaehlen(a, text, 0, "haupt", laufend, ask, start) ? a : null; };
   let h = haupt(); if (!h) return null;
   for (let n = 0; laufend && !h.vorhanden && n < NACHLESEN_MAX && Date.now() - start < VERBRAUCH_MS / 2; n++) { warten(NACHLESEN_MS); const h2 = haupt(); if (!h2) break; h = h2; } // A-1071: Protokoll läuft nach
@@ -538,11 +550,11 @@ export function sitzungsVerbrauch(e, start = Date.now()) {
     if (!protokollZaehlen(w, text, n + 1, helferRolle(d), null, false, start)) return null;
   }
   const s = { sitzung, modell: h.modell, abschluesse: h.abschluesse, teile: { ...h.teile, ...w.teile }, zuege: h.zuege, client: h.client, unvollstaendig: !!laufend && !h.vorhanden };
-  for (const f of VERBRAUCH_FELDER) s[f] = h[f] + w[f];
+  for (const f of [...VERBRAUCH_FELDER, ...PREIS_FELDER]) s[f] = h[f] + w[f];
   return s;
 }
 /** A-1071 P1: Stand für den Abgleich je Sitzung – Gesamtsumme, Teile und Züge. */
-const standVon = (s) => ({ summe: Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, s[f]])), teile: Object.fromEntries(Object.entries(s.teile).slice(0, STAND_TEILE_MAX)), zuege: s.zuege });
+const standVon = (s) => ({ summe: Object.fromEntries([...VERBRAUCH_FELDER, ...PREIS_FELDER].map((f) => [f, s[f]])), teile: Object.fromEntries(Object.entries(s.teile).slice(0, STAND_TEILE_MAX)), zuege: s.zuege });
 const standGueltig = (x) => x === null || (!!x && typeof x === "object" && !!x.summe && typeof x.summe === "object" && !!x.teile && typeof x.teile === "object");
 /** A-1071 P1: Zähler dieses Auftrags aus .exava/messung.jsonl – erste Stufe laut Hook, Aufrufe je Stufe, Rückgaben der Helfer je Rolle (Anzahl, Zeichen); jeder Fehler → leer. */
 function zaehlerLesen(job) {
@@ -573,12 +585,23 @@ function helferLesen(job, rueckgaben) {
   return [...new Set([...Object.keys(rollen), ...Object.keys(rueckgaben)])].sort().slice(0, 8).map((r) => { const g = rollen[r], q = rueckgaben[r], st = g?.stufen.size === 1 ? [...g.stufen][0] : "";
     return { rolle: r, starts: Math.min(g?.starts ?? 0, ZAEHLER_MAX), rueckgaben: Math.min(q?.rueckgaben ?? 0, ZAEHLER_MAX), rueckgabe_zeichen: q?.rueckgabe_zeichen ?? 0, ...(st ? { stufe: st } : {}) }; });
 }
-/** A-1071 P1: Messfelder der Messform 2 (Vertrag ABO_VERBRAUCH in lib/x/connector/symbiose-schemata.ts) – Teile, Züge und Zähler als Delta zur Basis des Auftrags; nur Zahlen und Namen. */
-function messfelder(e, s, basis, job) {
+/** A-1119: Preisfelder als Delta zur Basis – nur, wenn die Basis sie kennt (b null = der Teil bzw. die Sitzung begann in diesem Auftrag: Delta ab 0). Schrieb ein älterer Hook die
+ *  Basis (ohne Preisfelder), fehlen sie in dieser Meldung – ein Delta ab 0 zählte frühere Aufträge mit (EXAVA bucht dann ohne TTL und ohne Gegenwert, nie zu viel). */
+function preisDelta(x, b) {
+  if (b && !PREIS_FELDER.every((f) => Number.isFinite(b[f]))) return {};
+  const d = (f, q, r) => (q ? tokenZahl((Number(q[f]) || 0) - (Number(r?.[f]) || 0)) : 0), menge = (m) => m.input + m.output + m.cache_read + m.cache_creation;
+  const out = Object.fromEntries(PREIS_FELDER.map((f) => [f, f.startsWith("web") ? Math.min(d(f, x, b), ZAEHLER_MAX) : d(f, x, b)]));
+  for (const k of ["schnell", "lang"]) { const m = Object.fromEntries(MENGEN_FELDER.map((f) => [f, d(f, x[k], b?.[k])])); if (menge(m) > 0) out[k] = m; }
+  return out;
+}
+/** A-1071 P1: Messfelder der Messform 2 (Vertrag ABO_VERBRAUCH in lib/x/connector/symbiose-schemata.ts) – Teile, Züge und Zähler als Delta zur Basis des Auftrags; nur Zahlen und Namen.
+ *  A-1119: mit preis (Lease preisfelder: 1) je Teil dazu die Preisfelder (preisDelta). */
+function messfelder(e, s, basis, job, preis = false) {
   const d = (a, b) => tokenZahl((Number(a) || 0) - (Number(b) || 0)), menge = (x) => x.input + x.output + x.cache_read + x.cache_creation;
   const teile = Object.entries(s.teile).map(([k, t]) => { const b = basis?.teile?.[k] ?? {};
     return { rolle: t.rolle, modell: t.modell, ...(t.stufe ? { stufe: t.stufe } : {}), ...(t.stufe_zug ? { stufe_zug: t.stufe_zug } : {}), ...Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, d(t[f], b[f])])),
-      denken: d(t.denken, b.denken), antworten: Math.min(d(t.antworten, b.antworten), ZAEHLER_MAX), ...(t.rolle !== "haupt" ? { eingabe_erste: d(t.eingabe_erste, b.eingabe_erste) } : {}) }; })
+      denken: d(t.denken, b.denken), antworten: Math.min(d(t.antworten, b.antworten), ZAEHLER_MAX), ...(t.rolle !== "haupt" ? { eingabe_erste: d(t.eingabe_erste, b.eingabe_erste) } : {}),
+      ...(preis ? preisDelta(t, basis?.teile?.[k] ?? null) : {}) }; })
     .filter((t) => menge(t) > 0).sort((a, b) => menge(b) - menge(a) || `${a.rolle}|${a.modell}`.localeCompare(`${b.rolle}|${b.modell}`)).slice(0, TEILE_MAX);
   const z = zaehlerLesen(job), helfer = helferLesen(job, z.rueckgaben), stufe = stufeVon(e?.effort), umgebung = stufeVon(process.env.CLAUDE_CODE_EFFORT_LEVEL), bg = process.env.CLAUDE_AUTO_BACKGROUND_TASKS;
   return { ...(s.client ? { client: s.client } : {}), ...(stufe ? { stufe } : {}), ...(z.stufe_start ? { stufe_start: z.stufe_start } : {}), ...(Object.keys(z.hook_stufen).length ? { hook_stufen: z.hook_stufen } : {}),
@@ -601,7 +624,9 @@ export function auftragsVerbrauch(e, ti) {
   const basis = gueltig ? (st.aktuell === schluessel ? st.basis ?? null : st.letzter ?? null) : null;
   const v = { modell: String(s.modell).slice(0, 80), ...Object.fromEntries(VERBRAUCH_FELDER.map((f) => [f, tokenZahl(s[f] - (Number(basis?.summe?.[f]) || 0))])) };
   let meldung = v;
-  if (leaseRoh()?.messung === 2) try { meldung = { ...v, ...messfelder(e, s, basis, job) }; } catch { meldung = v; } // im Fehlerfall fehlen nur die Messfelder
+  const preis = leaseRoh()?.preisfelder === 1; // A-1119: der Server kennt die Preisfelder
+  if (preis) try { meldung = { ...v, ...preisDelta(s, basis?.summe ?? null) }; delete meldung.schnell; delete meldung.lang; } catch { meldung = v; } // gesamt: nur die vier Zähler
+  if (leaseRoh()?.messung === 2) try { meldung = { ...meldung, ...messfelder(e, s, basis, job, preis) }; } catch { /* im Fehlerfall fehlen nur die Messfelder */ }
   try { if (lstatSync(dir).isSymbolicLink()) return null; const t = `${pfad}.${process.pid}.tmp`; writeFileSync(t, JSON.stringify({ sitzung: s.sitzung, aktuell: schluessel, basis, letzter: standVon(s) })); renameSync(t, pfad); }
   catch { return null; }
   return meldung;
