@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/hintergrund-policy.mjs\" \"$d/hintergrund-policy.mjs\" && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/provider-vertrag.json\" \"$d/provider-vertrag.json\" && [ \"$(/usr/bin/sha256sum \"$d/hintergrund-policy.mjs\" | /usr/bin/cut -c1-64)\" = \"1a0eb9ff0f621e65000c36ebe9ed05a79be3fa4eb349e3ccea0b32931db438a3\" ] && [ \"$(/usr/bin/sha256sum \"$d/provider-vertrag.json\" | /usr/bin/cut -c1-64)\" = \"8d79b78089d56fe3911ac21799e5f241c22c13d50d0d41177059b8694c927795\" ] || { echo 'Gesperrt (G7): hintergrund-policy.mjs oder provider-vertrag.json verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/hintergrund-policy.mjs\"; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/hintergrund-policy.mjs\" \"$d/hintergrund-policy.mjs\" && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/provider-vertrag.json\" \"$d/provider-vertrag.json\" && [ \"$(/usr/bin/sha256sum \"$d/hintergrund-policy.mjs\" | /usr/bin/cut -c1-64)\" = \"5e32a2e2119c5a5c5b5924c472b6d26aa9b457e812a33e2aac511db7e1678eb9\" ] && [ \"$(/usr/bin/sha256sum \"$d/provider-vertrag.json\" | /usr/bin/cut -c1-64)\" = \"8d79b78089d56fe3911ac21799e5f241c22c13d50d0d41177059b8694c927795\" ] || { echo 'Gesperrt (G7): hintergrund-policy.mjs oder provider-vertrag.json verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/hintergrund-policy.mjs\"; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
             "timeout": 30,
             "onFailure": "block"
           }
@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"d9ee96672e198d5fba0dbf0c9066313c3e0a8d155c72c8582ee0878c8d80ae5a\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" pre; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"c17b1a42414f4713bb42d13ef6709ead13bba53c0388f082c81411a3ef99ce72\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" pre; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
             "timeout": 30,
             "onFailure": "block"
           }
@@ -75,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"d9ee96672e198d5fba0dbf0c9066313c3e0a8d155c72c8582ee0878c8d80ae5a\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" pre; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"c17b1a42414f4713bb42d13ef6709ead13bba53c0388f082c81411a3ef99ce72\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" pre; r=$?; /usr/bin/rm -rf \"$d\"; [ $r -eq 0 ] || exit 2",
             "timeout": 30,
             "onFailure": "block"
           }
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"d9ee96672e198d5fba0dbf0c9066313c3e0a8d155c72c8582ee0878c8d80ae5a\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" post; r=$?; /usr/bin/rm -rf \"$d\"; exit 0",
+            "command": "N=/usr/bin/node; [ -x \"$N\" ] || N=/opt/node22/bin/node; d=$(/usr/bin/mktemp -d) && /usr/bin/cp \"${CLAUDE_PROJECT_DIR}/.claude/hooks/x-ausfuehrung.mjs\" \"$d/x-ausfuehrung.mjs\" && [ \"$(/usr/bin/sha256sum \"$d/x-ausfuehrung.mjs\" | /usr/bin/cut -c1-64)\" = \"c17b1a42414f4713bb42d13ef6709ead13bba53c0388f082c81411a3ef99ce72\" ] || { echo 'Gesperrt (G7): x-ausfuehrung.mjs verändert oder nicht lesbar.' >&2; exit 2; }; \"$N\" \"$d/x-ausfuehrung.mjs\" post; r=$?; /usr/bin/rm -rf \"$d\"; exit 0",
             "timeout": 30
           }
         ]
