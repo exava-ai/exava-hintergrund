@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A-531 AUSFUEHRUNG PR 3: Hook der Hintergrundroutine für genau die freigabepflichtigen Aufrufe – Gmail send_message/reply und Schreibwerkzeuge jedes fremden Connectors (gesteuert(), MCP-1: z. B. Metricool, HubSpot, Notion, Slack, Shopify).
+// A-531 AUSFUEHRUNG PR 3: Hook der Hintergrundroutine für genau die freigabepflichtigen Aufrufe – Schreibwerkzeuge jedes fremden Connectors (A-1142, E-1348: nie Mail-Werkzeuge; Mails sendet nur EXAVA) (gesteuert(), MCP-1: z. B. Metricool, HubSpot, Notion, Slack, Shopify).
 // Muster: docs/x2/spike/mandant-repo/_claude/hooks/x-freigabe.mjs + versand-melden.mjs (Altweg, unverändert). Unterschied: kein Connector-Token – der Hook weist sich mit der Lease des
 // Auftrags aus (POST /api/x/freigabe-pruefen und /api/x/versand-melden ohne Authorization-Kopf, lib/x/connector/hook.ts, PR 1).
 //   post (PostToolUse, jedes MCP-Werkzeug): arbeit_holen von „EXAVA Hintergrund“ → Lease des gelieferten Auftrags nach .exava/lease.json (Claude schreibt sie nie selbst; ohne Auftrag geleert;
@@ -14,18 +14,13 @@
 //            A-1109 (Altordner einsammeln): nur im Einsammel-Auftrag (job.bezug.einsammeln → lease.einsammeln) Einträge verschieben → lease.verschieben (Name zusätzlich nach lease.umbenennen);
 //            get_file_permissions eines Quell- bzw. Zielordners dieser Einträge (eigen) → lease.quellordner (nie lease.ordner); get_file_metadata „00-EXAVA“ → lease.exava, eine Datei des Auftrags
 //            in ihrem bestätigten Quellordner (Elternordner bzw. search_files parentId = '<quelle>') → lease.quell_dateien – die Policy lässt den Ortswechsel nur dann zu (einsammelnVerschieben).
-//            Gmail get_thread im Versandauftrag: Thread-Stand (IDs, sha256) → /api/x/quellen-beobachtung mit Lease (B10-HINTERGRUND: Antwort nur, wenn der Thread unverändert ist).
 //            prepare_file_upload von „EXAVA Hintergrund“: Host der upload_url → lease.upload_hosts (A-531 COMPLIANCE H2: die Policy lässt curl PUT nur dorthin).
 //            A-600 FOLGE: ebenso exava_datei_lesen – Host der download_url → lease.upload_hosts (die Policy lässt curl -o nur von dort zu).
 //            A-608 BELEG-ORIGINAL (E-1120 Regel 1): Drive download_file_content im Auftrag belegsuche → der Hook selbst schreibt das Original (PDF/JPEG/PNG/TIFF, ≤ 20 MiB, Magic Bytes)
 //            nach arbeit/drive-<fileId>.<endung> und merkt die SHA-256 in lease.originale; die Policy lässt curl PUT im Auftrag belegsuche nur für eine gemerkte Prüfsumme zu.
-//            Ebenso Gmail get_message mit messageFormat RAW: PDF-/Bild-Anhänge (MIME, base64) nach arbeit/gmail-<messageId>-<n>.<endung>.
-//            A-657 GO pdf.py: ohne solchen Anhang die Rohmail nach arbeit/gmail-<messageId>.eml (lease.rohmails); Bash pdf.py --mail dazu → erzeugte PDF in lease.originale.
 //            A-846 (E-1143): ebenso in den Entwurfsaufträgen SPIEGEL_ARTEN (Original für den Anhang eines Entwurfs, EXAVA-Storage) – prepare_file_upload purpose dokument_original
 //            merkt URL und Prüfsumme in lease.spiegel; die Policy lässt curl PUT dorthin nur für genau dieses gemerkte Original zu.
 //            A-657/A-658: arbeit_holen eines Belegsuche-Auftrags mit job.bezug.csv → lease.csv (die Policy lässt dann Write und Upload der CSV zu).
-//            A-993b Schritt 6 (Auftrag belegsuche; A-996 auch postfach_hygiene, Schutzschild): mail_archivieren mit selbst_retten → lease.korb_frei (IDs mit Frist, von EXAVA); Gmail search_threads/get_thread/get_message →
-//            Nachrichten mit Label TRASH und Datum ≤ KORB_TAGE Tage → lease.korb_gesehen; untrash_message einer freigegebenen ID → lease.korb_raus; danach INBOX entfernt → lease.korb_fertig.
 //            A-642: Ist das Ergebnis größer als MAX_MCP_OUTPUT_TOKENS, liest der Hook die von Claude Code gespeicherte Ausgabe (<session_id>/tool-results/, gespeicherteAusgabe).
 //            A-1080: Binär-Blöcke (eingebettete Ressource, Bild) legt Claude Code als eigene Datei mcp-<server>-blob-<zeit>-<zufall>.<endung> im selben Ordner ab und meldet nur
 //            „Binary content (…) saved to <pfad>“ bzw. „[Image: source: <pfad>]“ – der Hook liest genau diese Datei (binaerDatei: ein Zeiger, Ordner der Sitzung, Server des Aufrufs,
@@ -34,7 +29,7 @@
 //            A-626 WEB (nur Aufträge aus WEB_ARTEN, A-782): arbeit_holen → lease.web = Web-Adressen aus dem Auftragstext (job.eingabe ohne angehängten Gesprächsverlauf); WebSearch → Adressen der Treffer
 //            (url mit title, nie der Suchtext); WebFetch → der Hook lädt dieselbe Seite selbst (GET, nur HTML, ≤ 4 MiB) und merkt Zieladresse und Links (href) – nie Text aus der
 //            Zusammenfassung des Modells. Höchstens 3.000 Adressen je Auftrag; die Policy lässt WebFetch und curl -o aus dem Web nur dafür zu.
-//            Gesteuerter Aufruf mit Vermerk aus pre → „ausgeführt“ melden (ok/fehler, bei Gmail mit Message-ID); Fehler beim Melden ändern nichts (der Wachhund setzt „unklar“).
+//            Gesteuerter Aufruf mit Vermerk aus pre → „ausgeführt“ melden (ok/fehler); Fehler beim Melden ändern nichts (der Wachhund setzt „unklar“).
 //   pre  (PreToolUse, jedes MCP-Werkzeug): nicht gesteuert → durchlassen (die übrigen Hooks entscheiden). Gesteuert → nur, wenn EXAVA für genau diesen Aufruf mit dieser Lease
 //            „erlaubt“ antwortet (Hash am freigegebenen Entwurf, genau einmal reserviert); sonst Exit 2. Keine Lease, kein Netz, Fehler, Frist, Anhänge → gesperrt (fail closed).
 //            A-615: Drive get_file_metadata im Auftrag ablage – bestätigter eigener Ordner namens „Archiv“ (Ordner-MIME) → lease.archiv (einziges Upload-Ziel).
@@ -65,9 +60,20 @@ export const VERBINDUNG = new Set(["and", "or", "then", "plus"]);
 export const woerter = (name) => String(name ?? "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").split(/[\s_.-]+/).filter(Boolean).map((w) => w.toLowerCase());
 export function lesend(name) { const w = woerter(name); if (w[0] === "bulk") w.shift(); return w.length > 0 && LESEN.has(w[0]) && !w.some((x) => SCHREIBEN.has(x)) && w.every((x, i) => !VERBINDUNG.has(w[i - 1]) || LESEN.has(x)); }
 export function mcpTeile(name) { const t = /^mcp__(.+?)__(.+)$/.exec(String(name ?? "")); return t ? { server: t[1].toLowerCase().replace(/[\s-]/g, "_"), werkzeug: t[2] } : null; }
-/** Freigabepflichtig und über diesen Hook ausführbar: Gmail senden/antworten (Mail-Entwurf, Hash v2) und jeder fremde Connector schreibend (Werkzeug-Entwurf, Hash v3, D18; MCP-1):
- *  fremd = kein Kern-Server (Gmail, Drive, Kalender), nicht exava*, kein UUID-Name (der bleibt beim Werkzeugvertrag, sonst fail closed). Wortgleich in hintergrund-policy.mjs. */
-export function gesteuert(t) { return !!t && ((t.server === "gmail" && (t.werkzeug === "send_message" || t.werkzeug === "reply")) || (!/(^|_)(gmail|(google_)?drive|google_calendar)$/.test(t.server) && !t.server.startsWith("exava") && !/^[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}$/.test(t.server) && /^[a-z0-9_]+$/.test(t.server) && /^[A-Za-z0-9_.-]+$/.test(t.werkzeug) && !lesend(t.werkzeug))); }
+/** A-1142 (E-1348): Mail-Werkzeug eines Connectors des Nutzers – wortgleich mit hintergrund-policy.mjs (dort die Sperre MAIL_SPERRE; scripts/test/a529-vorlage.ts prüft die Gleichheit). */
+export const MAIL_WORT = /mail|inbox|smtp|imap|posteingang|postfach/i;
+export const MAIL_SERVER = /mail|outlook|hotmail|imap|smtp|inbox|posteingang|postfach|(^|_)(microsoft|ms|office|m365|ms365|o365|office365)(_|\d|$)/;
+export const NACHRICHT_WORT = new Set(["message", "messages", "thread", "threads", "conversation", "conversations", "draft", "drafts", "label", "labels", "attachment", "attachments", "junk", "spam", "reply", "forward", "unread", "outbox"]);
+const CHAT_WORT = new Set(["chat", "chats", "teams", "channel", "channels"]);
+export function mailName(t) {
+  if (!t || typeof t.server !== "string" || t.server.startsWith("exava")) return false;
+  const w = String(t.werkzeug ?? ""), ws = woerter(w);
+  if (/(^|_)(gmail|google_?mail)(_|$)/.test(t.server) || MAIL_WORT.test(w)) return true;
+  return (MAIL_SERVER.test(t.server) || /^[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}$/.test(t.server)) && ws.some((x) => NACHRICHT_WORT.has(x)) && !ws.some((x) => CHAT_WORT.has(x));
+}
+/** Freigabepflichtig und über diesen Hook ausführbar: jeder fremde Connector schreibend (Werkzeug-Entwurf, Hash v3, D18; MCP-1) – fremd = kein Kern-Server (Gmail, Drive, Kalender), nicht exava*,
+ *  kein UUID-Name (der bleibt beim Werkzeugvertrag, sonst fail closed). A-1142 (E-1348): kein Gmail-Versand und kein Mail-Werkzeug mehr – Mails sendet nur EXAVA. Wortgleich in hintergrund-policy.mjs. */
+export function gesteuert(t) { return !!t && !/(^|_)(gmail|(google_)?drive|google_calendar)$/.test(t.server) && !t.server.startsWith("exava") && !/^[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}$/.test(t.server) && /^[a-z0-9_]+$/.test(t.server) && /^[A-Za-z0-9_.-]+$/.test(t.werkzeug) && !lesend(t.werkzeug) && !mailName(t); }
 
 const projekt = (env) => String(env.CLAUDE_PROJECT_DIR || process.cwd());
 const leasePfad = (env) => join(projekt(env), ".exava", "lease.json");
@@ -108,13 +114,9 @@ function antwortObjekte(r, out = []) {
   return out;
 }
 
-/** Hook-Körper für freigabe-pruefen aus dem Werkzeugaufruf: Mail (felder, Anhänge mit Inhalt nicht unterstützt) oder Werkzeug (eingabe). */
+/** Hook-Körper für freigabe-pruefen aus dem Werkzeugaufruf: Werkzeug-Entwurf (eingabe). A-1142 (E-1348): Mails sendet nur EXAVA – kein Mail-Körper mehr. */
 export function pruefKoerper(name, t, eingabe, lease, toolUseId) {
   const ti = eingabe && typeof eingabe === "object" && !Array.isArray(eingabe) ? eingabe : {};
-  if (t.server === "gmail") {
-    if (Array.isArray(ti.attachments) && ti.attachments.length) return null; // Anhänge: get_approved_draft lehnt sie ab – nie halb senden
-    return { lease, werkzeug: name, felder: ti, anhaenge: [], tool_use_id: toolUseId };
-  }
   return { lease, art: "werkzeug", werkzeug: name, eingabe: ti, tool_use_id: toolUseId };
 }
 
@@ -145,12 +147,10 @@ export async function vorher(eingabe, { env = process.env, f = fetch } = {}) {
   if (!lease) return nein("ohne Lease kein Ausführen – nur im Auftrag aus arbeit_holen nach Freigabe in EXAVA.");
   const toolUseId = String(eingabe.tool_use_id ?? "");
   if (!/^[^\s]{1,300}$/.test(toolUseId)) return nein("tool_use_id fehlt.");
-  const koerper = pruefKoerper(eingabe.tool_name, t, eingabe.tool_input, lease, toolUseId);
-  if (!koerper) return nein("Anhänge im Sendeaufruf werden in der Hintergrundarbeit nicht ausgeführt.");
-  const r = await senden("/api/x/freigabe-pruefen", koerper, f);
+  const r = await senden("/api/x/freigabe-pruefen", pruefKoerper(eingabe.tool_name, t, eingabe.tool_input, lease, toolUseId), f);
   if (r.status !== 200 || r.body?.erlaubt !== true || !UUID.test(String(r.body?.entwurf_id))) return nein(String(r.body?.text ?? r.body?.grund ?? `EXAVA antwortet ${r.status}`).slice(0, 300));
   mkdirSync(join(projekt(env), ".exava"), { recursive: true });
-  writeFileSync(vermerkPfad(env, toolUseId), JSON.stringify({ entwurf_id: r.body.entwurf_id, werkzeug: eingabe.tool_name, art: t.server === "gmail" ? null : "werkzeug" }));
+  writeFileSync(vermerkPfad(env, toolUseId), JSON.stringify({ entwurf_id: r.body.entwurf_id, werkzeug: eingabe.tool_name, art: "werkzeug" }));
   return { code: 0 };
 }
 
@@ -340,49 +340,6 @@ function ausfuehrungMerken(eingabe, env) {
   leaseSchreiben(env, JSON.stringify({ ...l, umbenennen: [...alt, ...um].slice(-300), whatsapp_ids: [...waAlt, ...wa].slice(-150),
     ...(vs.length ? { verschieben: [...leaseVerschieben(l).filter((x) => !vs.some((y) => y.file_id === x.file_id)), ...vs].slice(-150) } : {}), ...(dazu.length ? { quellordner: [...qo, ...dazu].slice(-50) } : {}) })); // A-1109: Name nach lease.umbenennen, Ort nach lease.verschieben
 }
-/** A-993b Schritt 6: Papierkorb der letzten KORB_TAGE Tage, höchstens KORB_MAX Rettungen je Lauf – wortgleich lib/postfach/einreihen.ts KORB_TAGE, KORB_MAX in hintergrund-policy.mjs. */
-export const KORB_TAGE = 14, KORB_MAX = 10;
-const GMAIL_NR = /^[0-9a-f]{10,24}$/i;
-const korbFehler = (eingabe) => alleObjekte(eingabe.tool_response).some((x) => x.isError === true || x.is_error === true);
-/** A-993b Schritt 6: Lease des Auftrags belegsuche bzw. (A-996, Schutzschild) postfach_hygiene für die Felder korb_* – sonst null; wortgleich KORB_ARTEN in hintergrund-policy.mjs. */
-const korbLease = (env) => { let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return null; } return l && (l.art === "belegsuche" || l.art === "postfach_hygiene") && leaseLesen(env) ? l : null; };
-const korbIds = (l, k) => (Array.isArray(l?.[k]) ? l[k].filter((x) => typeof x === "string") : []);
-/** A-993b Schritt 6: Freigabe von EXAVA (mail_archivieren ohne konto → selbst_retten { ids, bis }) für genau diesen Auftrag → lease.korb_frei; Frist höchstens 60 Minuten. */
-function korbFreigabeMerken(eingabe, env) {
-  const l = korbLease(env), lease = leaseLesen(env);
-  if (!l || korbFehler(eingabe) || String(eingabe.tool_input?.job_id ?? "").toLowerCase() !== String(lease?.job_id ?? "").toLowerCase()) return;
-  const s = antwortObjekte(eingabe.tool_response).map((x) => x?.selbst_retten).find((x) => x && Array.isArray(x.ids)), bis = Date.parse(String(s?.bis ?? ""));
-  if (!s || !Number.isFinite(bis)) return;
-  const neu = s.ids.filter((id) => typeof id === "string" && GMAIL_NR.test(id)).slice(0, KORB_MAX).map((id) => ({ id, bis: new Date(Math.min(bis, Date.now() + 3_600_000)).toISOString() }));
-  if (!neu.length) return;
-  const alt = (Array.isArray(l.korb_frei) ? l.korb_frei : []).filter((x) => x && typeof x.id === "string" && !neu.some((y) => y.id === x.id));
-  leaseSchreiben(env, JSON.stringify({ ...l, korb_frei: [...alt, ...neu].slice(-2 * KORB_MAX) }));
-}
-/** Zeitpunkt einer Gmail-Nachricht (internalDate in ms oder date als Text); unlesbar → -Infinity (nie im Fenster). */
-const korbZeit = (m) => { const d = m.internalDate ?? m.internal_date ?? m.date; const z = typeof d === "number" || /^\d{12,14}$/.test(String(d ?? "")) ? Number(d) : Date.parse(String(d ?? "")); return Number.isFinite(z) ? z : -Infinity; };
-/** A-993b Schritt 6: Nachrichten einer Gmail-Antwort nur in ihren festen Formen – die Nachricht selbst (get_message), messages (get_thread), threads[].messages (search_threads);
- *  JSON nur aus der MCP-Hülle (antwortObjekte), nie aus Feldern der Mail wie Text, Vorschau oder Anhang – so schleust kein Mailinhalt eine „gesehene“ Nachricht ein. */
-const korbNachrichten = (r) => antwortObjekte(r).flatMap((o) => [o, ...(Array.isArray(o.messages) ? o.messages : []), ...(Array.isArray(o.threads) ? o.threads.flatMap((t) => (Array.isArray(t?.messages) ? t.messages : [])) : [])])
-  .filter((m) => m && typeof m === "object");
-/** A-993b Schritt 6: Gmail-Antworten im Auftrag belegsuche bzw. postfach_hygiene – Nachrichten mit Label TRASH und Datum in den letzten KORB_TAGE Tagen → lease.korb_gesehen (höchstens 200). */
-function korbGesehenMerken(eingabe, env) {
-  const l = korbLease(env); if (!l || korbFehler(eingabe)) return;
-  const jetzt = Date.now(), grenze = jetzt - KORB_TAGE * 86_400_000;
-  const ids = korbNachrichten(eingabe.tool_response).filter((m) => typeof m.id === "string" && GMAIL_NR.test(m.id) && [m.labelIds, m.label_ids].some((x) => Array.isArray(x) && x.includes("TRASH"))
-    && korbZeit(m) >= grenze && korbZeit(m) <= jetzt + 86_400_000).map((m) => m.id);
-  if (!ids.length) return;
-  const neu = [...new Set(ids)], alt = korbIds(l, "korb_gesehen").filter((x) => !neu.includes(x));
-  leaseSchreiben(env, JSON.stringify({ ...l, korb_gesehen: [...alt, ...neu].slice(-200) }));
-}
-/** A-993b Schritt 6: ausgeführte Rettungsschritte – untrash_message einer freigegebenen ID → lease.korb_raus; danach INBOX entfernt (unlabel_message bzw. update_message_labels mit
- *  genau INBOX) für eine zurückgeholte ID → lease.korb_fertig (nur dafür lässt die Policy gerettet: true an EXAVA zu). Fehlerantwort → nichts. */
-function korbSchrittMerken(eingabe, env, werkzeug) {
-  const l = korbLease(env), id = eingabe.tool_input?.messageId; if (!l || typeof id !== "string" || korbFehler(eingabe)) return;
-  const inbox = (x) => Array.isArray(x) && x.length === 1 && x[0] === "INBOX", raus = korbIds(l, "korb_raus"), fertig = korbIds(l, "korb_fertig");
-  if (werkzeug === "untrash_message") { if (raus.includes(id) || !(Array.isArray(l.korb_frei) && l.korb_frei.some((x) => x?.id === id))) return; leaseSchreiben(env, JSON.stringify({ ...l, korb_raus: [...raus, id].slice(-2 * KORB_MAX) })); return; }
-  if (!raus.includes(id) || fertig.includes(id) || !(inbox(eingabe.tool_input?.labelIds) || inbox(eingabe.tool_input?.removeLabelIds))) return;
-  leaseSchreiben(env, JSON.stringify({ ...l, korb_fertig: [...fertig, id].slice(-2 * KORB_MAX) }));
-}
 /** A-534 (G7): Postfächer des Kunden aus job.bezug.verbindungen (von EXAVA, nie vom Modell) – kleingeschrieben, nur mit @, höchstens 20. */
 const adressen = (job) => (Array.isArray(job?.bezug?.verbindungen) ? job.bezug.verbindungen : []).map((v) => v?.adresse).filter((a) => typeof a === "string" && a.includes("@")).map((a) => a.toLowerCase()).slice(0, 20);
 /** Alle Objekte einer Antwort, rekursiv. JSON in Texten nur aus der MCP-Hülle (text/content/result/structuredContent), nie aus Datenfeldern
@@ -456,23 +413,11 @@ async function seiteMerken(eingabe, env, f) {
 }
 /** A-608 BELEG-ORIGINAL: Endung je Typ, erkannt an den ersten Bytes (nie am Namen oder mimeType der Antwort); Grenze wie beleg_original (20 MiB, lib/x/belegbild.ts). */
 export const ORIGINAL_MAX = 20 * 1024 * 1024;
-/** A-944 Nachtrag (Bauherr 04.11.2026): höchstens 40 gemerkte Originale je Auftrag (eine Belegsuche hat 30–35 Umsätze); Rohmails bleiben bei 10. */
+/** A-944 Nachtrag (Bauherr 04.11.2026): höchstens 40 gemerkte Originale je Auftrag (eine Belegsuche hat 30–35 Umsätze). */
 export const ORIGINALE_MAX = 40;
 export function originalEndung(buf) {
   return buf.subarray(0, 5).toString("latin1") === "%PDF-" ? "pdf" : buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff ? "jpg"
     : buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? "png" : ["II*\0", "MM\0*"].includes(buf.subarray(0, 4).toString("latin1")) ? "tif" : null;
-}
-/** A-608 BELEG-ORIGINAL: PDF-/Bild-Anhänge einer Roh-Mail (Gmail get_message RAW): MIME-Teile mit base64, verschachtelt höchstens 5 Ebenen, höchstens 50 Teile; Typ nur nach Magic Bytes. Rein, exportiert für den Test. */
-export function mimeAnhaenge(roh, tiefe = 0, out = []) {
-  const t = String(roh), k = /\r?\n\r?\n/.exec(t); if (!k || tiefe > 5 || out.length >= 50) return out;
-  const kopf = t.slice(0, k.index).replace(/\r?\n[ \t]+/g, " "), rumpf = t.slice(k.index + k[0].length);
-  const feld = (n) => new RegExp(`^${n}:\\s*(.*)$`, "im").exec(kopf)?.[1] ?? "";
-  const grenze = /^multipart\//i.test(feld("content-type")) ? /boundary="?([^";]+)"?/i.exec(feld("content-type"))?.[1] : null;
-  if (grenze) { for (const teil of rumpf.split(`--${grenze}`).slice(1, 51)) if (!teil.startsWith("--")) mimeAnhaenge(teil.replace(/^\r?\n/, ""), tiefe + 1, out); return out; }
-  if (!/^base64$/i.test(feld("content-transfer-encoding").trim())) return out;
-  const buf = Buffer.from(rumpf.replace(/[^A-Za-z0-9+/=]/g, ""), "base64");
-  if (originalEndung(buf) && buf.length <= ORIGINAL_MAX) out.push(buf);
-  return out;
 }
 /** A-642: Ein MCP-Ergebnis über MAX_MCP_OUTPUT_TOKENS (schon eine PDF ab ~70 KB) speichert Claude Code vollständig unter <Projektordner>/<session_id>/tool-results/ und meldet nur
  *  „Output has been saved to <pfad>“. Gelesen wird genau diese Datei: nur in diesem Ordner, reguläre Datei ohne Verweis, ≤ Grenze, `id` der Antwort = angefragte ID; sonst [].
@@ -523,40 +468,39 @@ export function binaerDatei(eingabe, o = {}) {
     return st.size > ORIGINAL_MAX ? { grund: "zeiger_zu_gross" } : { buf: readFileSync(pfad) };
   } catch { return { grund: "zeiger_keine_datei" }; }
 }
-/** A-608 BELEG-ORIGINAL: im Auftrag belegsuche Drive download_file_content (base64) bzw. Gmail get_message RAW (Anhänge) → Datei unter arbeit/ und SHA-256 in lease.originale
+/** A-608 BELEG-ORIGINAL: im Auftrag belegsuche Drive download_file_content (base64) → Datei unter arbeit/ und SHA-256 in lease.originale (A-1142: Gmail-Anhänge nicht mehr – Mails nur über EXAVA)
  *  (höchstens ORIGINALE_MAX); A-659: im Auftrag ablage nur die Drive-Datei unter arbeit/ (Prüfsumme per sha256sum, wenn Drive keine sha256Checksum liefert – nie ein Original); sonst nichts (fail closed).
  *  A-1080: dritte Quelle bei Drive – die vom Client gemeldete Binärdatei (binaerDatei); sie geht dem Base64-Feld vor (ein Bildblock kann verkleinert sein). Nennt die Antwort einen
  *  Datei-Datensatz mit ID, muss es die angefragte sein. Rückgabe: null = abgelegt bzw. nicht zuständig, sonst das Kürzel, warum ein Drive-Download keine Datei unter arbeit/ ergab. */
-function originalMerken(eingabe, env, quelle, o = {}) {
+function originalMerken(eingabe, env, o = {}) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return null; }
-  const id = quelle === "drive" ? eingabe.tool_input?.fileId : eingabe.tool_input?.messageId;
-  const nurDatei = UMBENENNEN_ARTEN.has(l?.art) && quelle === "drive"; // A-659: Ablage braucht nur die Bytes für die Prüfsumme; A-924 Erweiterung: ebenso das Drive-Fenster (Erstaufnahme)
+  const id = eingabe.tool_input?.fileId;
+  const nurDatei = UMBENENNEN_ARTEN.has(l?.art); // A-659: Ablage braucht nur die Bytes für die Prüfsumme; A-924 Erweiterung: ebenso das Drive-Fenster (Erstaufnahme)
   if (!l || (l.art !== "belegsuche" && !SPIEGEL_ARTEN.has(l.art) && !nurDatei) || !leaseLesen(env) || typeof id !== "string" || !/^[A-Za-z0-9_-]{6,120}$/.test(id)) return null; // A-846: SPIEGEL_ARTEN
   const objekte = alleObjekte(eingabe.tool_response);
   if (objekte.some((x) => x.isError === true || x.is_error === true)) return null;
-  const felder = quelle === "drive" ? ["blob", "data", "base64Content", "content", "contentBase64"] : ["raw"];
+  const felder = ["blob", "data", "base64Content", "content", "contentBase64"];
   const finden = (liste) => liste.flatMap((x) => felder.map((k) => x[k])).find((v) => typeof v === "string" && v.length >= 16 && v.length <= ORIGINAL_MAX * 1.4 && /^[A-Za-z0-9+/_-]+={0,2}$/.test(v));
-  const z = quelle === "drive" ? binaerDatei(eingabe, o) : null; // A-1080
+  const z = binaerDatei(eingabe, o); // A-1080
   const satzId = objekte.find((x) => typeof x.id === "string" && [x.mimeType, x.title, x.name].some((v) => typeof v === "string"))?.id;
   const zeiger = z?.buf && (satzId === undefined || satzId === id) ? z.buf : null;
   const b64 = zeiger ? null : finden(objekte) ?? finden(gespeicherteAusgabe(eingabe, id)); // A-642: über MAX_MCP_OUTPUT_TOKENS steht nur der Pfad in der Antwort
-  if (!zeiger && !b64) return quelle === "drive" ? (z?.buf ? "fremde_id" : z?.grund ?? "kein_inhalt") : null;
-  const bufs = zeiger ? [zeiger] : quelle === "drive" ? [Buffer.from(b64, "base64")] : mimeAnhaenge(Buffer.from(b64, "base64").toString("latin1"));
-  if (quelle === "gmail" && !bufs.length) { if (l.art === "belegsuche") rohmailMerken(l, id, Buffer.from(b64, "base64"), env); return null; } // A-657 GO pdf.py: Belegmail nur als HTML (nur Belegsuche)
+  if (!zeiger && !b64) return z?.buf ? "fremde_id" : z?.grund ?? "kein_inhalt";
+  const bufs = zeiger ? [zeiger] : [Buffer.from(b64, "base64")];
   let originale = Array.isArray(l.originale) ? l.originale.filter((x) => x && typeof x.sha256 === "string" && typeof x.datei === "string") : [];
   const vorher = originale.length;
   let grund = null, abgelegt = 0;
-  bufs.forEach((buf, n) => {
+  bufs.forEach((buf) => {
     const endung = originalEndung(buf) ?? (nurDatei ? "bin" : null); // A-924 Erweiterung: Office, CSV, Bild ohne Signatur nur für die Prüfsumme (arbeit/drive-<id>.bin), nie ein Original
     if (!endung || buf.length > ORIGINAL_MAX || originale.length >= ORIGINALE_MAX) { grund ??= !endung ? "typ" : buf.length > ORIGINAL_MAX ? "zu_gross" : "originale_voll"; return; }
-    const datei = quelle === "drive" ? `arbeit/drive-${id}.${endung}` : `arbeit/gmail-${id}-${n + 1}.${endung}`, sha256 = createHash("sha256").update(buf).digest("hex");
+    const datei = `arbeit/drive-${id}.${endung}`, sha256 = createHash("sha256").update(buf).digest("hex");
     mkdirSync(join(projekt(env), "arbeit"), { recursive: true });
     if ([join(projekt(env), "arbeit"), join(projekt(env), datei)].some((x) => { try { return lstatSync(x).isSymbolicLink(); } catch { return false; } })) { grund ??= "verweis"; return; } // nie über einen Verweis schreiben
     writeFileSync(join(projekt(env), datei), buf); abgelegt++;
     if (!nurDatei && !originale.some((x) => x.sha256 === sha256 && x.datei === datei)) originale = [...originale, { datei, sha256 }];
   });
   if (originale.length > vorher) leaseSchreiben(env, JSON.stringify({ ...l, originale }));
-  return quelle === "drive" && !abgelegt ? grund ?? "kein_inhalt" : null;
+  return !abgelegt ? grund ?? "kein_inhalt" : null;
 }
 /** A-1080 (kein stilles Ende): Form einer Werkzeugantwort ohne Inhalte – Blockarten der MCP-Hülle mit Anzahl (nur bekannte Namen), Zahl der Dateizeiger, ob ausgelagert. */
 const BLOCKARTEN = ["text", "image", "resource", "resource_link", "document", "audio"];
@@ -585,30 +529,6 @@ function ohneDatei(eingabe, env, grund, jetzt = new Date()) {
   return { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext:
     `Hinweis (EXAVA-Ausführung): Aus diesem Drive-Download liegt keine Datei unter arbeit/ (${grund}) – ohne sie kein Upload und keine Prüfsumme. Der Vermerk steht in arbeit/hook-blocks.jsonl: im nächsten heartbeat_job, complete_job oder arbeit_holen mit hook_blocks melden.` } }) };
 }
-/** A-657 GO pdf.py: Mail ohne PDF-/Bild-Anhang → Rohmail (≤ 2 MiB, Grenze von pdf.py) nach arbeit/gmail-<messageId>.eml, SHA-256 in lease.rohmails (höchstens 10) – nur sie darf pdf.py --mail lesen. */
-function rohmailMerken(l, id, buf, env) {
-  const datei = `arbeit/gmail-${id}.eml`, rohmails = Array.isArray(l.rohmails) ? l.rohmails.filter((x) => x && typeof x.datei === "string" && typeof x.sha256 === "string") : [];
-  if (!buf.length || buf.length > 2 << 20 || rohmails.length >= 10) return;
-  mkdirSync(join(projekt(env), "arbeit"), { recursive: true });
-  if ([join(projekt(env), "arbeit"), join(projekt(env), datei)].some((x) => { try { return lstatSync(x).isSymbolicLink(); } catch { return false; } })) return; // nie über einen Verweis schreiben
-  writeFileSync(join(projekt(env), datei), buf);
-  const sha256 = createHash("sha256").update(buf).digest("hex");
-  leaseSchreiben(env, JSON.stringify({ ...l, rohmails: [...rohmails.filter((x) => x.datei !== datei), { datei, sha256 }] }));
-}
-/** A-657 GO pdf.py (PostToolUse Bash): nach pdf.py --mail einer gemerkten Rohmail (Prüfsumme erneut gerechnet) wird die erzeugte PDF ein Original in lease.originale – nur wenn pdf.py
- *  genau diese Datei meldet, sie eine reguläre Datei mit %PDF- ist (≤ 20 MiB). Eine selbst geschriebene PDF gibt es im Auftrag belegsuche nicht (Write gesperrt). */
-export const MAIL_PDF = /^\/usr\/bin\/python3 -I \.claude\/tools\/pdf\.py --mail (arbeit\/gmail-([A-Za-z0-9_-]{6,120})\.eml) (arbeit\/gmail-\2-mail\.pdf)$/;
-function mailPdfMerken(eingabe, env) {
-  let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
-  const m = MAIL_PDF.exec(String(eingabe.tool_input?.command ?? ""));
-  if (!m || !l || l.art !== "belegsuche" || !leaseLesen(env)) return;
-  const lies = (d) => { try { const p = join(projekt(env), d), st = lstatSync(p); return st.isFile() && st.nlink === 1 && st.size <= ORIGINAL_MAX ? readFileSync(p) : null; } catch { return null; } };
-  const sha = (b) => createHash("sha256").update(b).digest("hex"), eml = lies(m[1]), pdf = lies(m[3]);
-  let gemeldet = null; try { gemeldet = JSON.parse(String(eingabe.tool_response?.stdout ?? "").trim())?.datei; } catch { /* kein JSON */ }
-  if (!eml || !pdf || gemeldet !== m[3] || originalEndung(pdf) !== "pdf" || !(Array.isArray(l.rohmails) && l.rohmails.some((x) => x?.datei === m[1] && x.sha256 === sha(eml)))) return;
-  const originale = Array.isArray(l.originale) ? l.originale.filter((x) => x && typeof x.sha256 === "string" && typeof x.datei === "string" && x.datei !== m[3]) : [];
-  if (originale.length < ORIGINALE_MAX) leaseSchreiben(env, JSON.stringify({ ...l, originale: [...originale, { datei: m[3], sha256: sha(pdf) }] }));
-}
 /** A-534 (G7): Ordner-ID aus get_file_permissions nur dann in lease.ordner, wenn ein verbundenes Postfach Eigentümer ist und die Lease-Art ablage lautet; sonst nichts (fail closed). */
 function ordnerBestaetigen(eingabe, env) {
   let l; try { l = JSON.parse(readFileSync(leasePfad(env), "utf8")); } catch { return; }
@@ -631,33 +551,11 @@ function ordnerBestaetigen(eingabe, env) {
   if (Object.keys(neu).length) leaseSchreiben(env, JSON.stringify({ ...l, ...neu }));
 }
 
-/** B10-HINTERGRUND: Thread-Stand aus der echten Antwort von Gmail get_thread (wie quellenbeobachtung.mjs, A-516 P4a): thread_id, alle Message-IDs, letzte; jede Abweichung → nicht lesbar. */
-export function threadBeobachtung(r) {
-  const leer = { lesbar: false }, id = (x, ...n) => { const w = n.map((k) => x?.[k]).find((v) => v != null); return typeof w === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(w) ? w : null; };
-  if (alleObjekte(r).some((x) => x.isError === true || x.is_error === true)) return leer;
-  const o = antwortObjekte(r).find((x) => Array.isArray(x.messages)), tid = id(o, "id", "threadId", "thread_id");
-  if (!tid || !o.messages.length || o.messages.length > 500) return leer;
-  const ids = [];
-  for (const m of o.messages) { const mid = id(m, "id", "messageId", "message_id"), mt = m?.threadId ?? m?.thread_id; if (!mid || (mt !== undefined && mt !== tid)) return leer; ids.push(mid); }
-  return new Set(ids).size === ids.length ? { lesbar: true, thread_id: tid, message_ids: ids, letzte_message_id: ids[ids.length - 1] } : leer;
-}
-/** B10-HINTERGRUND: im Versandauftrag (Lease-Art versand) den gelesenen Thread-Stand über den Lease-Weg von /api/x/quellen-beobachtung melden (nur IDs + sha256, keine Inhalte).
- *  Fehlt die Meldung, sperrt EXAVA den Versand einer Antwort (thread_nicht_beobachtet). */
-async function threadMelden(eingabe, env, f) {
-  let art; try { art = JSON.parse(readFileSync(leasePfad(env), "utf8"))?.art; } catch { return; }
-  const lease = leaseLesen(env), toolUseId = String(eingabe.tool_use_id ?? ""), b = threadBeobachtung(eingabe.tool_response);
-  if (art !== "versand" || !lease || !/^[^\s]{1,300}$/.test(toolUseId) || !b.lesbar) return;
-  const roh = typeof eingabe.tool_response === "string" ? eingabe.tool_response : JSON.stringify(eingabe.tool_response ?? null);
-  try { await senden("/api/x/quellen-beobachtung", { lease, tool_use_id: toolUseId, werkzeug: "get_thread", ...b, antwort_sha256: createHash("sha256").update(roh).digest("hex"), beobachtet_am: new Date().toISOString() }, f); }
-  catch { /* Meldung fehlgeschlagen: der Versand wird mit thread_nicht_beobachtet gesperrt (fail closed) */ }
-}
-
 /** PostToolUse: Lease aus arbeit_holen ablegen bzw. einen ausgeführten gesteuerten Aufruf melden. Immer Exit 0 (nach dem Aufruf lässt sich nichts mehr sperren).
  *  A-1080: `jetzt` (ms) nur für den Test der Zeiger-Frist; stdout trägt allein den Hinweis ohneDatei. */
 export async function nachher(eingabe, { env = process.env, f = fetch, jetzt } = {}) {
   if (eingabe?.tool_name === "WebSearch") { webMerken(env, trefferAdressen(eingabe.tool_response)); return { code: 0 }; } // A-626 WEB
   if (eingabe?.tool_name === "WebFetch") { await seiteMerken(eingabe, env, f); return { code: 0 }; } // A-626 WEB
-  if (eingabe?.tool_name === "Bash") { mailPdfMerken(eingabe, env); return { code: 0 }; } // A-657 GO pdf.py
   const t = mcpTeile(eingabe?.tool_name);
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "arbeit_holen") {
     const lease = (x) => typeof x.lease_token === "string" && x.job && typeof x.lauf_id === "string";
@@ -678,24 +576,18 @@ export async function nachher(eingabe, { env = process.env, f = fetch, jetzt } =
   if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "update_file") { mitLeaseSperre(env, () => umbenanntMerken(eingabe, env)); return { code: 0 }; } // A-1050 EINGANG
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "heartbeat_job") { mitLeaseSperre(env, () => namenMerken(eingabe, env)); return { code: 0 }; } // A-924 Erweiterung: Namen zum Umbenennen am Ort
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "ausfuehrung_liste") { mitLeaseSperre(env, () => ausfuehrungMerken(eingabe, env)); return { code: 0 }; } // A-930 (Weg A)
-  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "download_file_content") { const grund = mitLeaseSperre(env, () => originalMerken(eingabe, env, "drive", { jetzt })); return grund ? ohneDatei(eingabe, env, grund) : { code: 0 }; } // A-608 BELEG-ORIGINAL; A-1080: parallel sicher, kein stilles Ende
+  if (t && (t.server === "google_drive" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "download_file_content") { const grund = mitLeaseSperre(env, () => originalMerken(eingabe, env, { jetzt })); return grund ? ohneDatei(eingabe, env, grund) : { code: 0 }; } // A-608 BELEG-ORIGINAL; A-1080: parallel sicher, kein stilles Ende
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "browser_lesen" || t.werkzeug === "browser_beenden")) { uploadHostMerken(eingabe, env); return { code: 0 }; } // A-882: download_url der Eingangsbestätigung (Speicher-Host wie exava_datei_lesen)
   if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && (t.werkzeug === "prepare_file_upload" || t.werkzeug === "exava_datei_lesen")) { mitLeaseSperre(env, () => { uploadHostMerken(eingabe, env); if (t.werkzeug === "exava_datei_lesen") anhangMerken(eingabe, env); }); return { code: 0 }; } // A-818: Prüfsummen der geladenen Dateien; A-930: parallel sicher
-  if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "get_message" && eingabe.tool_input?.messageFormat === "RAW") { mitLeaseSperre(env, () => originalMerken(eingabe, env, "gmail")); return { code: 0 }; } // A-608 BELEG-ORIGINAL (Gmail-Anhang); A-1080: parallel sicher
-  if (t && (t.server === EXAVA_SERVER || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && t.werkzeug === "mail_archivieren") { mitLeaseSperre(env, () => korbFreigabeMerken(eingabe, env)); return { code: 0 }; } // A-993b Schritt 6
-  if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && ["untrash_message", "unlabel_message", "update_message_labels"].includes(t.werkzeug)) { mitLeaseSperre(env, () => korbSchrittMerken(eingabe, env, t.werkzeug)); return { code: 0 }; } // A-993b Schritt 6
-  if (t && (t.server === "gmail" || /^[0-9a-f]{8}_[0-9a-f]{4}_/.test(t.server)) && ["search_threads", "get_thread", "get_message"].includes(t.werkzeug) && korbLease(env)) mitLeaseSperre(env, () => korbGesehenMerken(eingabe, env)); // A-993b Schritt 6 (Sperre nur im Auftrag belegsuche)
-  if (t && t.server === "gmail" && t.werkzeug === "get_thread") { await threadMelden(eingabe, env, f); return { code: 0 }; }
   if (!gesteuert(t)) return { code: 0 };
   const toolUseId = String(eingabe.tool_use_id ?? ""); const pfad = vermerkPfad(env, toolUseId);
   let v; try { v = JSON.parse(readFileSync(pfad, "utf8")); } catch { return { code: 0 }; }
   const lease = leaseLesen(env); if (!lease) return { code: 0 };
   const antwort = antwortObjekte(eingabe.tool_response);
   const fehler = antwort.some((x) => x.isError === true || x.is_error === true || typeof x.error === "string");
-  const msgId = t.server === "gmail" ? antwort.map((x) => x.id ?? x.messageId ?? x.message_id).find((x) => typeof x === "string" && /^[^\s]{1,300}$/.test(x)) : null;
   try {
     await senden("/api/x/versand-melden", { lease, werkzeug: eingabe.tool_name, ...(v.art ? { art: v.art } : {}), entwurf_id: v.entwurf_id, tool_use_id: toolUseId, ergebnis: fehler ? "fehler" : "ok",
-      ...(msgId ? { gmail_message_id: msgId } : {}), ...(fehler ? { fehler: "Werkzeugfehler" } : {}) }, f);
+      ...(fehler ? { fehler: "Werkzeugfehler" } : {}) }, f);
   } catch { /* Meldung fehlgeschlagen: die Freigabe bleibt in_versand, der Wachhund setzt unklar */ }
   try { rmSync(pfad, { force: true }); } catch { /* temporärer Vermerk */ }
   return { code: 0 };
