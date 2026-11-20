@@ -17,14 +17,14 @@ Jeder EXAVA-Aufruf trägt `job_id`, `lauf_id`, `lease_generation` und `lease_tok
 ## 2. Je verbundener Kategorie genau EIN lesender Aufruf
 Diese Leseaufrufe sind der ausdrückliche Gegenstand dieses Prüfauftrags – hier also gefragt, nicht „ungefragt“ im Sinne von Grundregel 6 in `CLAUDE.md`. Für jeden anderen Auftrag gilt Grundregel 6 unverändert: keine Verbindungsprüfung, kein Rundgang. Lass hier keinen Aufruf aus – ohne sie wertet EXAVA den Prüflauf nicht als geprüft.
 - **Dateien:** Google Drive `mcp__Google_Drive__search_files` mit `query` nach dem Ordner `00-EXAVA`, `pageSize: 1`, `excludeContentSnippets: true`; OneDrive: ein Such- bzw. Listenwerkzeug des Microsoft-Connectors mit einem Treffer.
-- **Mail:** Gmail `mcp__Gmail__search_threads` mit `query: "newer_than:1d"`, `pageSize: 1`, `view: "THREAD_VIEW_MINIMAL"`; Outlook: ein Suchwerkzeug des Microsoft-Connectors mit einem Treffer.
+- **Mail (nur über EXAVA, E-1348):** `mcp__EXAVA_Hintergrund__mail_lesen` ohne `konto` (Postfachliste) – erreichbar, wenn sie mindestens ein Postfach nennt; Gmail-, Outlook- und andere Mail-Connectoren rufst du nie auf.
 - **Kalender:** `mcp__Google_Calendar__list_events` mit `startTime` und `endTime` von heute, `timeZone` aus `arbeit_holen`, `pageSize: 1`; Outlook-Kalender ebenso mit einem Treffer.
 - **Ergebnis je Kategorie:** `true`, wenn jeder Aufruf der Kategorie eine Antwort lieferte (auch eine leere Liste); `false`, wenn einer mit einer Fehlermeldung zurückkam (nicht verbunden, kein Zugriff, vom Hook gesperrt). Ohne verbundenen Connector entfällt die Kategorie.
 - **Weitere Connectoren** dieser Routine (z. B. Metricool, HubSpot): nur mit ihrem Namen wie in claude.ai nennen – nie aufrufen.
 
 ## 3. Abschließen
 `outcome: completed` nur, wenn du Schritt 1 und für jede verbundene Kategorie den Aufruf aus Schritt 2 wirklich ausgeführt hast.
-`mcp__EXAVA_Hintergrund__complete_job` mit `outcome: completed`, `result_refs: []`, `counters: {gesichtet: <geprüfte Kategorien>, verarbeitet: <davon true>, fehler: <davon false>}` und `connectoren: {drive, gmail, kalender, weitere}` – `drive` (Dateien), `gmail` (Mail, auch Outlook) und `kalender` je geprüfter Kategorie `true`/`false`, `weitere: [{name}]` ohne `erreichbar`. Im Prüfauftrag ist `connectoren` für jede verbundene Kategorie verlangt – nicht nur für die sonst benutzten.
+`mcp__EXAVA_Hintergrund__complete_job` mit `outcome: completed`, `result_refs: []`, `counters: {gesichtet: <geprüfte Kategorien>, verarbeitet: <davon true>, fehler: <davon false>}` und `connectoren: {drive, gmail, kalender, weitere}` – `drive` (Dateien), `gmail` (Mail über EXAVA) und `kalender` je geprüfter Kategorie `true`/`false`, `weitere: [{name}]` ohne `erreichbar`. Im Prüfauftrag ist `connectoren` für jede verbundene Kategorie verlangt – nicht nur für die sonst benutzten.
 Ist keine Kategorie verbunden: `outcome: failed`, `counters: {gesichtet: 0}`, `fehler_text: "keine_connectoren"` und `connectoren: {weitere: [{name}]}`.
 Danach weiter mit `arbeit_holen` wie in `routine.md` Schritt 4.
 

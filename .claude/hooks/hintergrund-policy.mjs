@@ -6,13 +6,12 @@
 // ALLOWLIST (alles andere Exit 2 mit Klartext, auch unbekannte Server und Werkzeuge – fail closed):
 //   eingebaut: Read, Glob, Grep, Skill, ToolSearch (lädt aufgeschobene Connector-Werkzeuge), TodoWrite; Bash, Write und Edit nur nach bashPruefen/schreibPruefen (A-531 DATEI),
 //   weil die Shell im Netz „Trusted“ sonst ein Weg nach draußen und an .claude/ vorbei wäre;
-//   A-534 (Kernregeln 9–11): Ablage (Drive am Ort umbenennen – A-924: nie verschieben, nie kopieren; Ortswechsel nur A-1050 aus 00-EXAVA/Eingang und A-1109 für Einträge des Einsammel-Auftrags –, Ordner anlegen) und Postfach-Hygiene (Spam aufheben, INBOX entfernen) nur mit einer Lease der passenden Auftragsart
+//   A-534 (Kernregeln 9–11): Ablage (Drive am Ort umbenennen – A-924: nie verschieben, nie kopieren; Ortswechsel nur A-1050 aus 00-EXAVA/Eingang und A-1109 für Einträge des Einsammel-Auftrags –, Ordner anlegen) nur mit einer Lease der passenden Auftragsart
 //   aus .exava/lease.json (schreibt nur x-ausfuehrung.mjs) und nur in engster Form (hygieneAusnahme); Löschen, Papierkorb, Teilen und Senden bleiben gesperrt;
-//   A-993b Schritt 6 (Bauherr 06.11.2026): im Auftrag belegsuche Gmail nur über den Claude-Connector – untrash_message (nur messageId) für eine von EXAVA freigegebene Nachricht
-//   (lease.korb_frei aus mail_archivieren ohne konto, mit Frist), die x-ausfuehrung.mjs mit Label TRASH und Datum ≤ 14 Tage gesehen hat (lease.korb_gesehen), höchstens KORB_MAX je Lauf;
-//   danach nur INBOX entfernen für eine so zurückgeholte Nachricht (lease.korb_raus); mail_archivieren mit gerettet: true nur für Nachrichten aus lease.korb_fertig (korbAusnahme, korbMeldung);
-//   A-996: ebenso im Auftrag postfach_hygiene für den Papierkorb-Schutzschild (Kernregel 18) – die Freigabe gibt EXAVA nur im Schutzschild-Lauf (bezug.schutzschild, nur executive);
-//   A-532/A-914: Helfer (Agent, früher Task) nur mit subagent_type x-scan oder x-triage; im Helfer nur Read, ToolSearch und Lesewerkzeuge von Drive und Gmail (ingest_document nur x-scan), sonst kein Subagent;
+//   A-1142 (E-1348, Bauherr 20.11.2026): Mails liest die Routine nur über EXAVA – jedes Werkzeug des Gmail-Connectors und jedes Mail-Werkzeug eines anderen Connectors (mailWerkzeug:
+//   Name, UUID über den Werkzeugvertrag, Outlook/Microsoft 365, allgemeine Leser ohne Dateimerkmal) ist im Hauptlauf und in jedem Helfer gesperrt (MAIL_SPERRE), vor jedem anderen Zweig;
+//   Papierkorb-Rettung, Archiv und Versand macht nur EXAVA (die frühere Selbst-Rettung über Gmail A-993b Schritt 6 und die Gmail-Hygiene A-534 sind entfallen);
+//   A-532/A-914: Helfer (Agent, früher Task) nur mit subagent_type x-scan oder x-drive-batch; im Helfer nur Read, ToolSearch und Lesewerkzeuge von Drive (ingest_document nur x-scan), sonst kein Subagent;
 //   und im Netz „Trusted“ wäre sie ein Weg nach draußen und an .claude/ vorbei;
 //   A-901 (Bauherr 02.11.2026): dazu im Helfer genau ingest_document von „EXAVA Hintergrund“ (scanIngest) – die Lease setzt dieser Hook per updatedInput aus .exava/lease.json, der Helfer bekommt sie nie;
 //   A-901 Teil 2: den Helfer nur im Vordergrund (run_in_background: false) und nur mit subagent_type, prompt, description starten (SCAN_AGENT_FELDER); sein erster Aufruf bindet
@@ -20,15 +19,15 @@
 //   A-930 (Weg A): dritter Helfer x-drive-batch (Ausführungsauftrag bezug.nur_ausfuehren) – im Helfer EXAVA nur ausfuehrung_liste, exava_datei_lesen und heartbeat_job (Lease per updatedInput
 //   wie A-901), Drive lesend plus am Ort umbenennen und WhatsApp-Upload nach hygieneAusnahme (dieselben Prüfungen wie im Hauptlauf), Bash nur curl -o von der download_url (BASH_LADEN);
 //   EXAVA nur vom Connector „EXAVA Hintergrund“ und nur die Werkzeuge in EXAVA_WERKZEUGE (der Server prüft Profil, Auftrag und Lease zusätzlich);
-//   Gmail, Google Drive, Google Calendar nur Werkzeuge der Klasse „lesen“ mit Profil recherche und nur geprüfte Eingabefelder;
-//   A-531 F1 (Grundregel 7, A-498/E-1109: „Lesen frei“): jeder andere Connector lesend nach lesend() aus sperre.mjs (wortgleich); schreibend nur gesteuert (MCP-1, unten), UUID-Namen und ungültige Zeichen sonst capability_missing; EXAVA-Namen bleiben gesperrt;
+//   Google Drive und Google Calendar nur Werkzeuge der Klasse „lesen“ mit Profil recherche und nur geprüfte Eingabefelder (Gmail steht nur noch für die UUID-Zuordnung im Vertrag);
+//   A-531 F1 (Grundregel 7, A-498/E-1109: „Lesen frei“): jeder andere Connector lesend nach lesend() aus sperre.mjs (wortgleich), außer Mail-Werkzeugen (A-1142); schreibend nur gesteuert (MCP-1, unten), UUID-Namen und ungültige Zeichen sonst capability_missing; EXAVA-Namen bleiben gesperrt;
 //   COMPLIANCE H1: fetch nur ohne method/mit GET/HEAD und ohne Body, query nur mit einer select/with-Anweisung ohne Schreibwörter (eingabeLesend); H2: curl PUT nur an lease.upload_hosts.
 //   A-608 BELEG-ORIGINAL (E-1120 Regel 1): im Auftrag belegsuche ist ein Upload nur das Original, das x-ausfuehrung.mjs aus Drive download_file_content geschrieben hat (SHA-256 in
 //   lease.originale, hier über die Datei neu gerechnet); Write/Edit und pdf.py sind dort gesperrt – ein selbst erzeugtes Dokument ist nie ein Belegoriginal.
-//   A-657/A-658 (Go Bauherr 22.10.2026) dort nur: im CSV-Modus (lease.csv) einmal Write von arbeit/belegsuche-<kürzel>.csv und curl PUT dieser CSV; pdf.py --mail nur für eine vom Hook
-//   gesicherte Rohmail (lease.rohmails) – die PDF wird erst nach dem Lauf von pdf.py zum Original (PostToolUse in x-ausfuehrung.mjs). Edit, andere Ziele und Skripte bleiben gesperrt.
+//   A-657/A-658 (Go Bauherr 22.10.2026) dort nur: im CSV-Modus (lease.csv) einmal Write von arbeit/belegsuche-<kürzel>.csv und curl PUT dieser CSV (A-1142: pdf.py --mail für
+//   Gmail-Rohmails entfällt). Edit, andere Ziele und Skripte bleiben gesperrt.
 //   A-846 (E-1143): in den Entwurfsaufträgen SPIEGEL_ARTEN ist ein curl PUT an eine gemerkte Upload-URL eines Originals (lease.spiegel, purpose dokument_original) nur für genau die Datei frei,
-//   die x-ausfuehrung.mjs aus Drive bzw. Gmail abgelegt hat (lease.originale, Prüfsumme hier neu gerechnet und gleich der angemeldeten).
+//   die x-ausfuehrung.mjs aus Drive abgelegt hat (lease.originale, Prüfsumme hier neu gerechnet und gleich der angemeldeten).
 //   A-818 (G5, Go Bauherr 28.10.2026): im Ablage-Auftrag mit job.bezug.datev_paket zusätzlich curl -o und sha256sum genau dieser Paket-ZIP, die drei Ordner aus lease.datev und der ZIP-Platzhalter
 //   nur in den bestätigten Monatsordner (lease.datev_ziel); Löschen, Papierkorb, Teilen und Senden bleiben gesperrt.
 //   A-626 WEB (Go Bauherr 21.10.2026), A-782 (Go 26.10.2026): WebSearch und WebFetch nur in den Aufträgen aus WEB_ARTEN (webPruefen) – Suchtext ohne Mailadresse, IBAN und lange Nummer; WebFetch und curl -o aus dem Web
@@ -36,7 +35,7 @@
 //   so gelangen keine Mandantendaten an fremde Domains.
 //   A-905 (E-1166, Bauherr 02.11.2026): die Startadresse von browser_starten darf Claude selbst bestimmen (startFrei: https mit Domain, ohne Mailadresse, IBAN und lange Nummer,
 //   auch mehrfach kodiert oder in Vollbreite; Freitext wie Namen erkennt keine Regel) – kein WebSearch-Umweg mehr; WebFetch und curl -o bleiben bei lease.web.
-//   A-531 AUSFUEHRUNG (PR 3): gesteuert() – Gmail send_message/reply und jeder fremde Connector schreibend (MCP-1; nicht Gmail/Drive/Kalender, nicht exava*, kein UUID-Name) – entscheidet NICHT dieser Hook, sondern x-ausfuehrung.mjs (Lease + Freigabe in
+//   A-531 AUSFUEHRUNG (PR 3): gesteuert() – jeder fremde Connector schreibend außer Mail-Werkzeugen (MCP-1; nicht Gmail/Drive/Kalender, nicht exava*, kein UUID-Name) – entscheidet NICHT dieser Hook, sondern x-ausfuehrung.mjs (Lease + Freigabe in
 //   EXAVA, fail closed); hier frei, damit genau dieser zweite Hook zuständig ist (settings.json führt beide mit Prüfsumme; fehlt er, sperrt die Integritätsprüfung).
 //   A-907 Fehler-Radar: jeder Exit 2 hängt eine kleine Zeile an arbeit/hook-blocks.jsonl (blockZeile/blockMerken: Zeit, Werkzeug, Sperrgrund, bei Bash der geschwärzte Kurzbefehl) –
 //   nur im Hook-Lauf von Claude Code (CLAUDE_PROJECT_DIR gesetzt), Fehler beim Schreiben werden ignoriert, der Block bleibt Exit 2; die Routine meldet die Zeilen mit hook_blocks.
@@ -87,6 +86,27 @@ const SQL_SCHREIBEN = /\b(insert|update|delete|merge|drop|alter|create|truncate|
 const QUERY_SCHREIBEN = /\bmutation\b|\b(insert|update|delete|replace|remove|upsert)(one|many)\b|\bfindoneand|\bfindandmodify\b|\bbulkwrite\b|\bmatch\b[\s\S]*\b(set|remove|detach)\b/i;
 /** A-531 HOOK-AUDIT-2 G2: Methode auch als httpMethod, _method, X-HTTP-Method-Override (Schlüssel) oder als Kopfzeile im Text. */
 const METHODE = /^(x-http-|x-|http_?|request_?|_)?method(-override)?$/;
+/** A-1142 (E-1348, Bauherr 20.11.2026: „Sobald die EXAVA-Routine läuft, darf sie E-Mails strikt NUR über die EXAVA-MCP-Tools lesen/suchen und muss vorhandene Gmail-/Mail-Konnektoren
+ *  des Users aktiv ignorieren.“): Mail-Werkzeug eines Connectors des Nutzers – Gmail ganz (Name; per UUID der Werkzeugvertrag, mailWerkzeug), sonst das Mail-Wort im Werkzeugnamen und auf
+ *  Mail- bzw. Microsoft-Connectoren und UUID-Namen zusätzlich Nachrichten, Threads, Entwürfe, Labels und Anhänge (Teams-Chats nicht). EXAVA-Server nie (EXAVA prüft selbst; die normale
+ *  Verbindung sperrt die Policy eigens). Wortgleich in x-ausfuehrung.mjs (scripts/test/a529-vorlage.ts prüft die Gleichheit). Drive, OneDrive/SharePoint-Dateien und Kalender bleiben frei. */
+export const MAIL_WORT = /mail|inbox|smtp|imap|posteingang|postfach/i;
+export const MAIL_SERVER = /mail|outlook|hotmail|imap|smtp|inbox|posteingang|postfach|(^|_)(microsoft|ms|office|m365|ms365|o365|office365)(_|\d|$)/;
+export const NACHRICHT_WORT = new Set(["message", "messages", "thread", "threads", "conversation", "conversations", "draft", "drafts", "label", "labels", "attachment", "attachments", "junk", "spam", "reply", "forward", "unread", "outbox"]);
+const CHAT_WORT = new Set(["chat", "chats", "teams", "channel", "channels"]);
+export function mailName(t) {
+  if (!t || typeof t.server !== "string" || t.server.startsWith("exava")) return false;
+  const w = String(t.werkzeug ?? ""), ws = woerter(w);
+  if (/(^|_)(gmail|google_?mail)(_|$)/.test(t.server) || MAIL_WORT.test(w)) return true;
+  return (MAIL_SERVER.test(t.server) || /^[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}$/.test(t.server)) && ws.some((x) => NACHRICHT_WORT.has(x)) && !ws.some((x) => CHAT_WORT.has(x));
+}
+/** A-1142: Sperrtext (ein Satz) – geht über den bestehenden Fehler-Radar-Weg (arbeit/hook-blocks.jsonl → hook_blocks) an EXAVA. */
+export const MAIL_SPERRE = "Mails liest die Routine nur über EXAVA (mail_lesen).";
+/** A-1142: allgemeiner Leser ohne Fachwort (read_resource, fetch, get_item, search …) – auf einem Mail- bzw. Microsoft-Connector nur mit Dateimerkmal und ohne Mailmerkmal in der Eingabe
+ *  (OneDrive/SharePoint-Datei frei, Mail gesperrt; unklar → gesperrt, fail closed). */
+const GENERISCH = new Set(["resource", "resources", "item", "items", "content", "contents", "object", "objects", "uri", "url", "data", "by", "id", "ids", "entity", "record", "records"]);
+export const DATEI_MERKMAL = /sharepoint|onedrive|\/drives?\/|\/sites\/|driveitem|file:\/\/|\.(?:pdf|docx?|xlsx?|pptx?|csv|odt|ods|rtf|jpe?g|png)\b/i;
+export const MAIL_MERKMAL = /mail|message|inbox|outlook\.|conversation/i;
 /** Alle [Schlüssel, Wert] und Texte der Eingabe; zu tief oder zu groß → null (fail closed). */
 function teileDer(x, out = { paare: [], texte: [] }, t = 0) {
   if (!out || t > 8 || out.paare.length + out.texte.length > 2000) return null;
@@ -104,14 +124,12 @@ export function eingabeLesend(werkzeug, ti) {
 }
 /** A-532: einziger Helfer (Scans mit günstigem Modell, .claude/agents/x-scan.md) und was er darf. */
 export const SCAN_AGENT = "x-scan";
-/** A-914: zweiter Helfer x-triage (Vorsortierung, .claude/agents/x-triage.md) – gleiche Startregeln, im Helfer nur Read, ToolSearch, Drive/Gmail lesend, kein EXAVA-Werkzeug. */
-export const TRIAGE_AGENT = "x-triage";
 /** A-930 (Weg A): dritter Helfer x-drive-batch (.claude/agents/x-drive-batch.md) – führt die fertig berechnete Liste des Ausführungsauftrags aus (gleiche Startregeln). */
 export const DRIVE_AGENT = "x-drive-batch";
-const HELFER = new Set([SCAN_AGENT, TRIAGE_AGENT, DRIVE_AGENT]);
+const HELFER = new Set([SCAN_AGENT, DRIVE_AGENT]); // A-1142: x-triage (Vorsortierung von Gmail-Mails) entfällt – Mails liest nur die Routine über EXAVA
 /** A-930: EXAVA-Werkzeuge des Helfers x-drive-batch und ihre Felder (Verträge in lib/x/connector/symbiose-schemata.ts); job_id, lauf_id, lease_generation, lease_token setzt der Hook. */
 export const DRIVE_EXAVA = { ausfuehrung_liste: ["seite"], exava_datei_lesen: ["dokument_id"], heartbeat_job: ["schritt", "drive_dateien", "hook_blocks"] }; // A-930d: hook_blocks meldet auch der Helfer (routine.md, A-907)
-const SCAN_EINGEBAUT = new Set(["Read", "ToolSearch", "SubagentHandback"]), SCAN_SERVER = new Set(["gmail", "google_drive"]); // A-919: SubagentHandback = Rückgabeweg des Helfers an die Routine (Claude Code), ohne ihn kommt kein Ergebnis an
+const SCAN_EINGEBAUT = new Set(["Read", "ToolSearch", "SubagentHandback"]), SCAN_SERVER = new Set(["google_drive"]); // A-919: SubagentHandback = Rückgabeweg des Helfers an die Routine (Claude Code), ohne ihn kommt kein Ergebnis an
 /** A-901: das eine EXAVA-Werkzeug des Helfers und seine Felder (Vertrag ingest_document, lib/x/connector/symbiose-schemata.ts); die vier Lease-Felder überschreibt scanIngest immer. */
 export const SCAN_EXAVA = "ingest_document";
 export const SCAN_INGEST_FELDER = ["job_id", "lauf_id", "lease_generation", "lease_token", "idempotency_key", "pipeline_version", "source_ref", "provider_version", "expected_source_version", "source_timestamp",
@@ -123,7 +141,6 @@ export const SCAN_AGENT_FELDER = ["subagent_type", "prompt", "description", "run
 export const PDF_RENDERER_SHA256 = "62f9c0e6e6f9e460636b208330297b2a9cf31a31285f99b773135ee2c3f8cfa0", XLSX_RENDERER_SHA256 = "0643294b441c03a9948810b953ad65cf21ecde7184e0e24111a480c5aab95582"; // A-622 P3-A: Listen als .xlsx
 const NAME = String.raw`[A-Za-z0-9._-]{1,140}(?:__#[0-9a-f]{8})?`, DATEI = String.raw`arbeit/${NAME}\.(?:pdf|json|csv|docx|xlsx)`;
 const MIME = String.raw`(?:application/pdf|text/csv|application/vnd\.openxmlformats-officedocument\.(?:wordprocessingml\.document|spreadsheetml\.sheet))`;
-export const BASH_PDF_MAIL = /^\/usr\/bin\/python3 -I \.claude\/tools\/pdf\.py --mail (arbeit\/gmail-([A-Za-z0-9_-]{6,120})\.eml) arbeit\/gmail-\2-mail\.pdf$/; // A-657 GO pdf.py: HTML-Belegmail 1:1
 export const BASH_PDF = new RegExp(String.raw`^/usr/bin/python3 -I \.claude/tools/pdf\.py arbeit/${NAME}\.json arbeit/${NAME}\.pdf$`);
 export const BASH_XLSX = new RegExp(String.raw`^/usr/bin/python3 -I \.claude/tools/xlsx\.py arbeit/${NAME}\.json arbeit/${NAME}\.xlsx$`);
 const GELADEN = String.raw`arbeit/${NAME}\.(?:pdf|jpe?g|png|webp|heic|tiff?|docx?|xlsx?|csv|txt|odt|ods|rtf)`; // A-600 FOLGE: Eingang (x-eingang) – geladene Datei aus exava_datei_lesen; A-642 OFFICE: Formate der Anhang-Ablage
@@ -137,8 +154,8 @@ export const BASH_WC = new RegExp(String.raw`^/usr/bin/wc -c ${SHA_DATEI}(?: ${S
 const MAXZEIT = String.raw`(?: --max-time 120)?`;
 export const BASH_LADEN = new RegExp(String.raw`^/usr/bin/curl -q -sSfL${MAXZEIT} -o ${GELADEN} "https://([A-Za-z0-9.-]+)/storage/v1/object/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+(?:&download=[A-Za-z0-9._%()~+-]*)?"$`); // A-632 FOLGE: „+“ = Leerzeichen im Dateinamen
 export const BASH_CURL = new RegExp(String.raw`^/usr/bin/curl -q -sSf${MAXZEIT} -X PUT --data-binary @${DATEI} -H "content-type: ${MIME}" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
-/** A-608 BELEG-ORIGINAL: Upload des Originals (Datei vom Hook unter arbeit/drive-<fileId>.<endung> bzw. arbeit/gmail-<messageId>-<n>.<endung>, Typ wie beleg_original; A-657: …-mail.pdf aus pdf.py --mail). */
-export const BASH_CURL_ORIGINAL = new RegExp(String.raw`^/usr/bin/curl -q -sSf${MAXZEIT} -X PUT --data-binary @(arbeit/(?:drive-[A-Za-z0-9_-]{6,120}|gmail-[A-Za-z0-9_-]{6,120}-(?:\d{1,2}|mail))\.(?:pdf|jpg|png|tif)) -H "content-type: (?:application/pdf|image/jpeg|image/png|image/tiff)" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
+/** A-608 BELEG-ORIGINAL: Upload des Originals (Datei vom Hook unter arbeit/drive-<fileId>.<endung>, Typ wie beleg_original; A-1142: keine Gmail-Originale mehr – Mails nur über EXAVA). */
+export const BASH_CURL_ORIGINAL = new RegExp(String.raw`^/usr/bin/curl -q -sSf${MAXZEIT} -X PUT --data-binary @(arbeit/drive-[A-Za-z0-9_-]{6,120}\.(?:pdf|jpg|png|tif)) -H "content-type: (?:application/pdf|image/jpeg|image/png|image/tiff)" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
 /** A-657/A-658: ausgefüllte CSV der Belegsuche (eine Gesellschaft je Auftrag) – nur im CSV-Modus (lease.csv). */
 const CSV_BELEG = String.raw`arbeit/belegsuche-[A-Za-z0-9._-]{1,60}\.csv`;
 export const BASH_CURL_CSV = new RegExp(String.raw`^/usr/bin/curl -q -sSf${MAXZEIT} -X PUT --data-binary @(${CSV_BELEG}) -H "content-type: text/csv" "https://([A-Za-z0-9.-]+)/storage/v1/object/upload/sign/belege/[A-Za-z0-9/._%-]+\?token=[A-Za-z0-9._-]+"$`);
@@ -177,16 +194,14 @@ export function bashPruefen(ti) {
 }
 /** A-608 BELEG-ORIGINAL: Auftrag belegsuche – nur sha256sum und curl PUT des Originals; die Prüfsumme der Datei (kein Verweis) muss in lease.originale stehen, der Host in lease.upload_hosts. */
 export function originalPruefen(c) {
-  const m = BASH_CURL_ORIGINAL.exec(c), k = BASH_CURL_CSV.exec(c), pm = BASH_PDF_MAIL.exec(c);
-  if (c.includes("..") || !(BASH_SHA.test(c) || BASH_WC.test(c) || m || k || pm)) return nein("Bash", "im Auftrag belegsuche nur sha256sum, wc -c, curl PUT des aus Drive oder Gmail geladenen Originals bzw. der CSV (CSV-Modus) und pdf.py --mail.");
-  if (pm) return dateiSha(".claude/tools/pdf.py") !== PDF_RENDERER_SHA256 ? nein("Bash", "pdf.py verändert oder nicht lesbar.") // A-657 GO pdf.py: Eingang nur die vom Hook gesicherte Rohmail
-    : leaseRohmails().some((o) => o.datei === pm[1] && o.sha256 === dateiSha(pm[1])) ? frei() : nein("Bash", "pdf.py --mail nur für die Rohmail, die der Hook aus Gmail get_message RAW gesichert hat (Prüfsumme).");
+  const m = BASH_CURL_ORIGINAL.exec(c), k = BASH_CURL_CSV.exec(c);
+  if (c.includes("..") || !(BASH_SHA.test(c) || BASH_WC.test(c) || m || k)) return nein("Bash", "im Auftrag belegsuche nur sha256sum, wc -c und curl PUT des aus Drive geladenen Originals bzw. der CSV (CSV-Modus).");
   if (k) return leaseRoh()?.csv !== true || !dateiSha(k[1]) ? nein("Bash", "CSV-Upload nur im CSV-Modus der Belegsuche (job.bezug.csv) und nur für arbeit/belegsuche-<kürzel>.csv.") // A-657
     : leaseUploadHosts().includes(k[2].toLowerCase()) ? frei() : nein("Bash", "curl PUT nur an den Host der Upload-URL aus prepare_file_upload (Lease).");
   if (!m) return frei();
   const p = join(projektDir(), m[1]); let h = "";
   try { if (!lstatSync(p).isSymbolicLink()) h = createHash("sha256").update(readFileSync(p)).digest("hex"); } catch { /* fehlt */ }
-  if (!h || !leaseOriginale().some((o) => o.sha256 === h && o.datei === m[1])) return nein("Bash", "Upload nur für das Original, das der Hook aus Drive download_file_content bzw. Gmail get_message RAW gemerkt hat (Prüfsumme).");
+  if (!h || !leaseOriginale().some((o) => o.sha256 === h && o.datei === m[1])) return nein("Bash", "Upload nur für das Original, das der Hook aus Drive download_file_content gemerkt hat (Prüfsumme).");
   return leaseUploadHosts().includes(m[2].toLowerCase()) ? frei() : nein("Bash", "curl PUT nur an den Host der Upload-URL aus prepare_file_upload (Lease).");
 }
 /** A-846 (E-1143): curl PUT an eine gemerkte Upload-URL eines Originals (lease.spiegel) nur in SPIEGEL_ARTEN und nur für genau das Original, das der Hook abgelegt hat (lease.originale)
@@ -196,7 +211,7 @@ export function spiegelPruefen(c) {
   const t = uploadToken(/"(https:\/\/[^"\s]+)"$/.exec(c)?.[1] ?? ""), z = t ? leaseSpiegel().find((x) => uploadToken(x.url) === t) : null;
   if (!z) return null;
   const m = BASH_CURL_ORIGINAL.exec(c);
-  if (!m || c.includes("..") || !SPIEGEL_ARTEN.has(leaseArt())) return nein("Bash", "Upload eines Originals für einen Anhang nur für die Datei, die der Hook aus Drive download_file_content bzw. Gmail get_message RAW abgelegt hat.");
+  if (!m || c.includes("..") || !SPIEGEL_ARTEN.has(leaseArt())) return nein("Bash", "Upload eines Originals für einen Anhang nur für die Datei, die der Hook aus Drive download_file_content abgelegt hat.");
   const h = dateiSha(m[1]);
   if (!h || h !== z.sha256 || !leaseOriginale().some((o) => o.sha256 === h && o.datei === m[1])) return nein("Bash", "Upload nur für das gemerkte Original mit genau der angemeldeten Prüfsumme.");
   return leaseUploadHosts().includes(m[2].toLowerCase()) ? frei() : nein("Bash", "curl PUT nur an den Host der Upload-URL aus prepare_file_upload (Lease).");
@@ -278,8 +293,6 @@ export function leaseUploadHosts() { const h = leaseRoh()?.upload_hosts; return 
 /** A-846: gemerkte Upload-URLs der Originale für Anhänge (x-ausfuehrung.mjs uploadHostMerken, purpose dokument_original). */
 export function leaseSpiegel() { const o = leaseRoh()?.spiegel; return Array.isArray(o) ? o.filter((x) => x && typeof x.url === "string" && /^[0-9a-f]{64}$/.test(String(x.sha256))) : []; }
 export function leaseOriginale() { const o = leaseRoh()?.originale; return Array.isArray(o) ? o.filter((x) => x && typeof x.datei === "string" && /^[0-9a-f]{64}$/.test(String(x.sha256))) : []; }
-/** A-657 GO pdf.py: von x-ausfuehrung.mjs gesicherte Rohmails { datei, sha256 } (Gmail get_message RAW ohne PDF-/Bild-Anhang); sonst leer. */
-export function leaseRohmails() { const o = leaseRoh()?.rohmails; return Array.isArray(o) ? o.filter((x) => x && typeof x.datei === "string" && /^[0-9a-f]{64}$/.test(String(x.sha256))) : []; }
 /** A-626 WEB: Adressen, die die Routine öffnen darf – x-ausfuehrung.mjs merkt sie aus job.eingabe, WebSearch-Treffern und Links geöffneter Seiten; sonst leer. */
 export function leaseWeb() { const w = leaseRoh()?.web; return Array.isArray(w) ? w.filter((x) => typeof x === "string") : []; }
 /** A-782 (Go Bauherr 26.10.2026): Auftragsarten mit Web – Arbeitsauftrag, Ablage-Prüfung, Mail-Vorbereitung, Antwort; alle anderen (Hygiene, Sync, Belegsuche …) ohne.
@@ -332,7 +345,7 @@ function leaseRoh() {
   try { const l = JSON.parse(readFileSync(join(projektDir(), ".exava", "lease.json"), "utf8")); return /^[0-9a-f-]{36}$/i.test(String(l.job_id)) && typeof l.lease_token === "string" && typeof l.art === "string" ? l : null; } catch { return null; }
 }
 const NUR = (ti, felder) => ti && typeof ti === "object" && !Array.isArray(ti) && Object.keys(ti).every((k) => felder.includes(k));
-const ID = (x) => typeof x === "string" && /^[A-Za-z0-9_-]{6,200}$/.test(x), INBOX = (x) => Array.isArray(x) && x.length === 1 && x[0] === "INBOX";
+const ID = (x) => typeof x === "string" && /^[A-Za-z0-9_-]{6,200}$/.test(x);
 /** A-924 (Bauherr 03.11.2026): EIN Namensschema für neue Namen im Drive wie in der Archivzeile – lib/belege/namen.ts SCHEMA_REGEX (JJJJ-MM-TT__Gesellschaft__TYP__…) mit __#hash8 und
  *  Endung, ≤ 220 Zeichen, ohne / \ < > : " | ? * und Steuerzeichen. Den Namen baut EXAVA (lib/x/dateiname.ts); die Routine übernimmt ihn unverändert (bezug.umbenennen, heartbeat_job). */
 const ZEICHEN = String.raw`[^/\\<>:"|?*\x00-\x1f]`;
@@ -348,50 +361,15 @@ export const ANHANG_MIME = { pdf: "application/pdf", doc: "application/msword", 
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", odt: "application/vnd.oasis.opendocument.text", ods: "application/vnd.oasis.opendocument.spreadsheet", rtf: "application/rtf",
   jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic" }; // A-655: Beleg-Fotos und Scans (nie .ics/.vcf)
 const anhangEndung = (b) => /^@arbeit\/[A-Za-z0-9._-]{1,140}(?:__#[0-9a-f]{8})?\.(pdf|docx?|xlsx?|csv|odt|ods|rtf|jpe?g|png|webp|heic)$/.exec(String(b))?.[1];
-/** A-993b Schritt 6: Rettungen je Lauf – wortgleich KORB_MAX in lib/x/connector/lesen-mail.ts und x-ausfuehrung.mjs (scripts/test/a531-hook-audit-2.ts prüft die Gleichheit). */
-export const KORB_MAX = 10;
-/** A-993b Schritt 6: Gmail-Werkzeuge der Selbst-Rettung und Gmail-Nachrichten-ID (Hex wie GMAIL_ID in lib/x/connector/lesen-mail.ts). */
-export const KORB_GMAIL = new Set(["untrash_message", "unlabel_message", "update_message_labels"]);
-const GMAIL_NR = (x) => typeof x === "string" && /^[0-9a-f]{10,24}$/i.test(x);
-const korbListe = (k) => { const l = leaseRoh()?.[k]; return Array.isArray(l) ? l : []; };
-/** A-993b Schritt 6 (Bauherr 06.11.2026): Beleg aus dem Gmail-Papierkorb ins Archiv, wenn Gmail nur über den Claude-Connector angebunden ist – nur im Auftrag belegsuche;
- *  A-996: ebenso kritische Post im Auftrag postfach_hygiene (Papierkorb-Schutzschild, Freigabe von EXAVA nur im Schutzschild-Lauf). KORB_ARTEN = diese beiden Lease-Arten.
- *  untrash_message: nur messageId, von EXAVA freigegeben (lease.korb_frei, Frist), mit TRASH und Datum ≤ 14 Tage gesehen (lease.korb_gesehen), höchstens KORB_MAX je Lauf (lease.korb_raus);
- *  danach unlabel_message bzw. update_message_labels nur mit genau INBOX zum Entfernen für eine hier zurückgeholte Nachricht. Nie trash, nie andere Labels, nie Labels anlegen. */
-export const KORB_ARTEN = new Set(["belegsuche", "postfach_hygiene"]);
-function korbAusnahme(werkzeug, ti) {
-  const n = `gmail/${werkzeug}`, id = ti?.messageId, raus = korbListe("korb_raus");
-  if (!KORB_ARTEN.has(leaseArt())) return nein(n, "nur im Auftrag „belegsuche“ bzw. „postfach_hygiene“ (Lease aus arbeit_holen) für eine von EXAVA freigegebene Nachricht.");
-  if (werkzeug === "untrash_message") {
-    if (!NUR(ti, ["messageId"]) || !GMAIL_NR(id)) return nein(n, "nur messageId (Gmail-Nachrichten-ID).");
-    if (!korbListe("korb_frei").some((x) => x?.id === id && Date.parse(String(x?.bis)) > Date.now())) return nein(n, "nur eine von EXAVA freigegebene Nachricht – erst mail_archivieren ohne konto mit ordner papierkorb, aktion archiv und umsatz_id bzw. schutzschild (Antwort selbst_retten).");
-    if (!korbListe("korb_gesehen").includes(id)) return nein(n, "nur eine Nachricht, die du mit includeTrash im Papierkorb der letzten 14 Tage gefunden hast (Label TRASH und Datum in der Gmail-Antwort).");
-    return raus.includes(id) || raus.length < KORB_MAX ? frei() : nein(n, `höchstens ${KORB_MAX} Rettungen je Lauf.`);
-  }
-  const ok = (werkzeug === "unlabel_message" ? NUR(ti, ["messageId", "labelIds"]) && INBOX(ti.labelIds) : NUR(ti, ["messageId", "removeLabelIds"]) && INBOX(ti.removeLabelIds)) && raus.includes(id);
-  return ok ? frei() : nein(n, "nur INBOX entfernen (labelIds bzw. removeLabelIds genau [\"INBOX\"]) und nur für eine Nachricht, die du in diesem Lauf mit untrash_message zurückgeholt hast.");
-}
-/** A-993b Schritt 6: mail_archivieren mit gerettet: true (Erfolg der Selbst-Rettung, EXAVA schreibt das Audit) nur für Nachrichten, die hier zurückgeholt und aus dem Posteingang
- *  genommen wurden (lease.korb_fertig, schreibt nur x-ausfuehrung.mjs) – sonst stünde im Audit eine Rettung, die es nicht gab; null = nicht betroffen. */
-const korbMeldung = (name, werkzeug, ti) => werkzeug !== "mail_archivieren" || ti?.gerettet !== true ? null
-  : KORB_ARTEN.has(leaseArt()) && Array.isArray(ti.nachrichten) && ti.nachrichten.length > 0 && ti.nachrichten.every((id) => korbListe("korb_fertig").includes(id)) ? frei()
-  : nein(name, "gerettet: true nur für Nachrichten, die du in diesem Lauf mit untrash_message zurückgeholt und danach aus dem Posteingang genommen hast.");
 /** A-534: enge Ausnahmen für Kernregeln 9–11; null = Werkzeug nicht betroffen (dann gilt der Vertrag), sonst frei/nein. */
 export function hygieneAusnahme(server, werkzeug, ti) {
-  if (server === "gmail" && KORB_GMAIL.has(werkzeug) && (werkzeug === "untrash_message" || leaseArt() === "belegsuche")) return korbAusnahme(werkzeug, ti); // A-993b Schritt 6
-  const art = { gmail: ["unmark_message_spam", "unmark_thread_spam", "unlabel_message", "unlabel_thread", "update_message_labels"], google_drive: ["update_file", "create_file"] }[server]?.includes(werkzeug) // A-924: copy_file gesperrt (nie eine zweite Kopie)
-    ? (server === "gmail" ? "postfach_hygiene" : "ablage") : null;
+  const art = server === "google_drive" && ["update_file", "create_file"].includes(werkzeug) ? "ablage" : null; // A-924: copy_file gesperrt (nie eine zweite Kopie); A-1142: Gmail nie (Mails nur über EXAVA)
   if (!art) return null;
   const n = `${server}/${werkzeug}`;
   const dub = werkzeug === "create_file" && ti?.base64Content === undefined && (ti?.title ?? ti?.name) === "_Dubletten"; // A-1050: Ordner der Dubletten im Archiv auch im Drive-Fenster
   const arten = werkzeug === "update_file" || dub ? [...UMBENENNEN_ARTEN] : [art]; // A-924 Erweiterung: am Ort umbenennen auch im Drive-Fenster (lesen und benennen in einem Schritt)
   if (!arten.includes(leaseArt())) return nein(n, `nur in einem Auftrag „${arten.join("“ oder „")}“ (Lease aus arbeit_holen).`);
-  const ok = werkzeug === "unmark_message_spam" ? NUR(ti, ["messageId"]) && ID(ti.messageId)
-    : werkzeug === "unmark_thread_spam" ? NUR(ti, ["threadId"]) && ID(ti.threadId)
-    : werkzeug === "unlabel_message" ? NUR(ti, ["messageId", "labelIds"]) && ID(ti.messageId) && INBOX(ti.labelIds)
-    : werkzeug === "unlabel_thread" ? NUR(ti, ["threadId", "labelIds"]) && ID(ti.threadId) && INBOX(ti.labelIds)
-    : werkzeug === "update_message_labels" ? NUR(ti, ["messageId", "removeLabelIds"]) && ID(ti.messageId) && INBOX(ti.removeLabelIds)
-    : werkzeug === "update_file" && ti?.parentId !== undefined ? eingangVerschieben(ti) || einsammelnVerschieben(ti) // A-1050 EINGANG: genau die eine Verschiebung 00-EXAVA/Eingang → Archiv bzw. Archiv/_Dubletten; A-1109: Einträge des Einsammel-Auftrags
+  const ok = werkzeug === "update_file" && ti?.parentId !== undefined ? eingangVerschieben(ti) || einsammelnVerschieben(ti) // A-1050 EINGANG: genau die eine Verschiebung 00-EXAVA/Eingang → Archiv bzw. Archiv/_Dubletten; A-1109: Einträge des Einsammel-Auftrags
     : werkzeug === "update_file" ? NUR(ti, ["fileId", "name", "title"]) && ID(ti.fileId) && (ti.name === undefined) !== (ti.title === undefined) // A-924 AM ORT: nur umbenennen, kein Elternordner (nie verschieben); A-659 title wie name
       && (inPlaceName(ti.title ?? ti.name) || rueckName(ti.fileId, ti.title ?? ti.name)) && leaseUmbenennen().some((u) => u.file_id === ti.fileId && u.titel === (ti.title ?? ti.name)) // nur genau der Name, den EXAVA geplant hat (job.bezug.umbenennen); A-1109: Rücknahme auf den alten Namen
       && leaseUngeteilt().includes(ti.fileId) // G7: nur eine eigene, nicht geteilte Datei (get_file_permissions)
@@ -416,7 +394,7 @@ export function hygieneAusnahme(server, werkzeug, ti) {
     : werkzeug === "update_file" ? "nur fileId und title = genau der Name aus EXAVA für diese Datei (titel aus ausfuehrung_liste bzw. job.bezug.umbenennen)"
     : upload && ![leaseRoh()?.archiv, leaseRoh()?.whatsapp].some((z) => typeof z === "string" && ti.parentId === z) ? "Zielordner nicht bestätigt – parentId nur 00-EXAVA/Archiv bzw. 00-EXAVA/WhatsApp (im Lauf angelegt oder per get_file_permissions und get_file_metadata bestätigt)"
     : upload ? "Upload nur mit title (Name aus EXAVA), base64Content = platzhalter, contentMimeType = mime (beides aus ausfuehrung_liste) und disableConversionToGoogleType: true" : null;
-  return ok ? frei() : nein(n, grund ? `${grund}.` : "nur in engster Form: Spam aufheben, INBOX entfernen, Datei am Ort umbenennen (nur fileId und title, genau der Name aus EXAVA – job.bezug.umbenennen bzw. namen aus heartbeat_job –, alle lesbaren Dokumente, nur eine eigene, nicht geteilte Datei nach get_file_permissions – nie verschieben, nie kopieren), Ordner „Eingang“, „Archiv“ oder „WhatsApp“ anlegen (Elternordner nur ein bestätigter eigener), Anhang als „@arbeit/<datei>.<pdf|docx|xlsx|…>“ mit Namen nach Schema JJJJ-MM-TT__Gesellschaft__TYP__…__#hash8 nach 00-EXAVA/Archiv bzw. ein WhatsApp-Dokument nach 00-EXAVA/WhatsApp hochladen, DATEV-Paket als „@arbeit/<name>.zip“ in seinen bestätigten Monatsordner (Ordner nur aus job.bezug.datev_paket) – kein anderer Inhalt, keine Rechte.");
+  return ok ? frei() : nein(n, grund ? `${grund}.` : "nur in engster Form: Datei am Ort umbenennen (nur fileId und title, genau der Name aus EXAVA – job.bezug.umbenennen bzw. namen aus heartbeat_job –, alle lesbaren Dokumente, nur eine eigene, nicht geteilte Datei nach get_file_permissions – nie verschieben, nie kopieren), Ordner „Eingang“, „Archiv“ oder „WhatsApp“ anlegen (Elternordner nur ein bestätigter eigener), Anhang als „@arbeit/<datei>.<pdf|docx|xlsx|…>“ mit Namen nach Schema JJJJ-MM-TT__Gesellschaft__TYP__…__#hash8 nach 00-EXAVA/Archiv bzw. ein WhatsApp-Dokument nach 00-EXAVA/WhatsApp hochladen, DATEV-Paket als „@arbeit/<name>.zip“ in seinen bestätigten Monatsordner (Ordner nur aus job.bezug.datev_paket) – kein anderer Inhalt, keine Rechte.");
 }
 export const EINGEBAUT = new Set(["Read", "Glob", "Grep", "Skill", "ToolSearch", "TodoWrite", "SubagentHandback"]); // A-919: Rückgabe eines Helfers – trägt im Hook nicht immer agent_type, gibt nur Text an den Aufrufer
 /** Entwurf #1182: claude.ai-Connectoren können statt eines Namens eine UUID tragen (`mcp__4553787f-…__send_message`, nach mcpTeile mit „_“). */
@@ -428,8 +406,8 @@ export function mcpTeile(name) {
   return t ? { server: t[1].toLowerCase().replace(/[\s-]/g, "_"), werkzeug: t[2] } : null;
 }
 
-/** A-531 AUSFUEHRUNG: wortgleich in x-ausfuehrung.mjs (scripts/test/a529-vorlage.ts prüft die Gleichheit). */
-export function gesteuert(t) { return !!t && ((t.server === "gmail" && (t.werkzeug === "send_message" || t.werkzeug === "reply")) || (!/(^|_)(gmail|(google_)?drive|google_calendar)$/.test(t.server) && !t.server.startsWith("exava") && !/^[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}$/.test(t.server) && /^[a-z0-9_]+$/.test(t.server) && /^[A-Za-z0-9_.-]+$/.test(t.werkzeug) && !lesend(t.werkzeug))); }
+/** A-531 AUSFUEHRUNG: wortgleich in x-ausfuehrung.mjs (scripts/test/a529-vorlage.ts prüft die Gleichheit). A-1142 (E-1348): kein Gmail-Versand und kein Mail-Werkzeug mehr – Mails sendet nur EXAVA. */
+export function gesteuert(t) { return !!t && !/(^|_)(gmail|(google_)?drive|google_calendar)$/.test(t.server) && !t.server.startsWith("exava") && !/^[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}$/.test(t.server) && /^[a-z0-9_]+$/.test(t.server) && /^[A-Za-z0-9_.-]+$/.test(t.werkzeug) && !lesend(t.werkzeug) && !mailName(t); }
 
 /** Werkzeugvertrag prüfen und liefern; wirft bei jeder Abweichung (fail closed). Wortgleich mit symbiose-policy.mjs. */
 export function vertragPruefen(v) {
@@ -448,6 +426,22 @@ export const vertragLesen = (url = new URL("./provider-vertrag.json", import.met
 const hat = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const frei = () => ({ code: 0 });
 const nein = (werkzeug, grund) => ({ code: 2, stderr: `Gesperrt (EXAVA-Hintergrund): ${String(werkzeug).slice(0, 120)} – ${grund}` });
+/** A-1142 (E-1348): Mail-Werkzeug eines Connectors des Nutzers – im Hauptlauf und in jedem Helfer gesperrt (MAIL_SPERRE). UUID-Name: der Werkzeugvertrag entscheidet (Gmail → gesperrt,
+ *  Drive/Kalender → nicht betroffen), ein EXAVA-Werkzeug per UUID bleibt beim EXAVA-Zweig; sonst mailName und auf Mail- bzw. Microsoft-Connectoren der allgemeine Leser nur mit Dateimerkmal. */
+export function mailWerkzeug(teile, ti, vertrag) {
+  if (!teile || teile.server === EXAVA_SERVER || teile.server.startsWith("exava")) return false;
+  const w = teile.werkzeug;
+  if (UUID_SERVER.test(teile.server)) {
+    const v = vertrag ?? vertragLesen(), treffer = [...VERTRAG_SERVER].filter((s) => hat(v.server[s], w));
+    if (treffer.length) return treffer.includes("gmail");
+    if (EXAVA_WERKZEUGE.has(w) || EXAVA_BEKANNT.has(w)) return false;
+  }
+  if (mailName(teile)) return true;
+  const ws = woerter(w); if (ws[0] === "bulk") ws.shift();
+  if (!MAIL_SERVER.test(teile.server) || !ws.length || !LESEN.has(ws[0]) || !ws.every((x) => LESEN.has(x) || GENERISCH.has(x))) return false;
+  const e = teileDer(ti ?? {}), text = e ? [...e.texte, ...e.paare.map(([k]) => k)].join(" ") : "";
+  return !e || MAIL_MERKMAL.test(text) || !DATEI_MERKMAL.test(text);
+}
 /** A-531 F1: fremder Connector (auch UUID) – EXAVA-Name gesperrt, lesend frei, sonst capability_missing (fail closed). */
 const fremdLesend = (name, werkzeug, ti) => EXAVA_BEKANNT.has(werkzeug) || EXAVA_WERKZEUGE.has(werkzeug) ? nein(name, "EXAVA-Werkzeug nur vom Connector „EXAVA Hintergrund“.")
   : !lesend(werkzeug) ? nein(name, "capability_missing: fremder Connector nur lesend; schreiben, senden, anlegen und löschen sind gesperrt.")
@@ -664,10 +658,9 @@ export function helferBinden(agentId, rolle, stufe) {
 }
 export const helferAuftrag = (agentId) => { try { const p = helferDatei(agentId); return typeof agentId === "string" && agentId && lstatSync(p).isFile() ? JSON.parse(readFileSync(p, "utf8"))?.job_id ?? null : null; } catch { return null; } };
 /** A-1071 P1 Leseweg des Helfers x-scan (.exava/lesen-<sha256(agent_id)>.json, der letzte gilt): read_file_content → drive_text (Textauszug von Drive, bei Scans dessen Texterkennung),
- *  download_file_content → datei, Read nur für einen Pfad unter arbeit/ → datei (ein Read der ausgelagerten Antwort ändert den Weg nicht), get_message → gmail_text,
- *  A-1080: download_gmail_attachment → datei (der Anhang kommt als Datei, wie beim Drive-Download); dazu einmal das Modell
+ *  download_file_content → datei, Read nur für einen Pfad unter arbeit/ → datei (ein Read der ausgelagerten Antwort ändert den Weg nicht); dazu einmal das Modell
  *  des Helfers aus seinem Protokoll (≤ 256 KiB, erste Antwort mit gültigem message.model, ≤ 300 ms; nicht bestimmbar → beim nächsten Lesewerkzeug erneut). */
-export const LESEWEG = { read_file_content: "drive_text", download_file_content: "datei", get_message: "gmail_text", download_gmail_attachment: "datei" };
+export const LESEWEG = { read_file_content: "drive_text", download_file_content: "datei" }; // A-1142: kein Gmail-Leseweg mehr (Mails nur über EXAVA)
 const AGENT_ID = /^[A-Za-z0-9_-]{4,80}$/, MODELL_NAME = /^[\w.:/-]{1,80}$/;
 const lesenDatei = (agentId) => join(projektDir(), ".exava", `lesen-${createHash("sha256").update(String(agentId)).digest("hex").slice(0, 32)}.json`);
 const unterArbeit = (f) => { if (typeof f !== "string" || !f) return false; const r = relative(projektDir(), resolve(projektDir(), f)); return r.startsWith("arbeit/") && !r.split(/[\\/]/).includes(".."); };
@@ -741,21 +734,22 @@ export function entscheide(roh, { vertrag } = {}) {
 function entscheideEingabe(eingabe, vertrag) {
   const name = eingabe.tool_name, teile = mcpTeile(name);
   const scan = eingabe.agent_type != null; // A-532: Aufruf aus einem Helfer (agent_type laut Hook-Eingabe); nur x-scan, sonst gesperrt
-  if (scan && !HELFER.has(eingabe.agent_type)) return nein(name, `Helfer ${String(eingabe.agent_type).slice(0, 60)} nicht freigegeben (nur ${SCAN_AGENT}, ${TRIAGE_AGENT}).`);
+  if (scan && !HELFER.has(eingabe.agent_type)) return nein(name, `Helfer ${String(eingabe.agent_type).slice(0, 60)} nicht freigegeben (nur ${SCAN_AGENT}, ${DRIVE_AGENT}).`);
   if (scan) helferBinden(eingabe.agent_id, eingabe.agent_type, eingabe.effort); // A-901 Teil 2: der erste Aufruf bindet den Helfer an den laufenden Auftrag; A-1071: mit Rolle und Stufe
   const ag = eingabe.tool_input; // A-901 Teil 2: nur im Vordergrund und nur mit SCAN_AGENT_FELDER
   if (name === "Agent" || name === "Task") return !scan && NUR(ag, SCAN_AGENT_FELDER) && HELFER.has(ag.subagent_type) && ag.run_in_background === false && typeof ag.prompt === "string" && ag.prompt.trim() !== ""
-    ? frei() : nein(name, `nur die Helfer ${SCAN_AGENT}, ${TRIAGE_AGENT} und ${DRIVE_AGENT} mit subagent_type, prompt, description und run_in_background: false (nie im Hintergrund, kein model/effort), aus dem Helfer kein weiterer.`);
+    ? frei() : nein(name, `nur die Helfer ${SCAN_AGENT} und ${DRIVE_AGENT} mit subagent_type, prompt, description und run_in_background: false (nie im Hintergrund, kein model/effort), aus dem Helfer kein weiterer.`);
   if (!teile && scan && eingabe.agent_type === DRIVE_AGENT && name === "Bash") return BASH_LADEN.test(String(eingabe.tool_input?.command ?? "")) ? bashPruefen(eingabe.tool_input) // A-930: WhatsApp-Dokument laden
     : nein(name, `im Helfer ${DRIVE_AGENT} nur curl -o nach arbeit/<dokument_id>.<endung> von der download_url aus exava_datei_lesen.`);
   if (!teile && !scan && name === "Bash") return bashPruefen(eingabe.tool_input);
   if (!teile && !scan && (name === "Write" || name === "Edit")) return schreibPruefen(name, eingabe.tool_input);
   if (!teile && !scan && (name === "WebSearch" || name === "WebFetch")) return webPruefen(name, eingabe.tool_input); // A-626 WEB
   if (!teile) return (scan ? SCAN_EINGEBAUT : EINGEBAUT).has(name) ? frei() : nein(name, "nur Read, Glob, Grep, Skill, ToolSearch, TodoWrite (Shell nur in festen Formen, Web nur in Arbeits-, Prüf- und Antwortaufträgen, Schreiben nur unter arbeit/, Helfer nur x-scan).");
+  if (mailWerkzeug(teile, eingabe.tool_input, vertrag)) return nein(name, MAIL_SPERRE); // A-1142 (E-1348): Hauptlauf und jeder Helfer, Name und UUID – vor jedem anderen Zweig
   if (scan && eingabe.agent_type === SCAN_AGENT && teile.server === EXAVA_SERVER && teile.werkzeug === SCAN_EXAVA) return scanIngest(name, eingabe.tool_input, eingabe.agent_id); // A-901: genau dieses EXAVA-Werkzeug, Lease vom Hook
   if (scan && eingabe.agent_type === DRIVE_AGENT && teile.server === EXAVA_SERVER) return driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id); // A-930
   if (scan && (teile.server === EXAVA_SERVER || teile.server.startsWith("exava") || gesteuert(teile))) return nein(name, `im Helfer ${SCAN_AGENT} nur ${SCAN_EXAVA} von „EXAVA Hintergrund“, keine anderen EXAVA- und keine Schreibwerkzeuge.`);
-  if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? gelesenVonEntfernen(teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
+  if (teile.server === EXAVA_SERVER) return EXAVA_WERKZEUGE.has(teile.werkzeug) ? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? gelesenVonEntfernen(teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input) : nein(name, "EXAVA-Werkzeug nicht für die Hintergrundarbeit freigegeben.");
   if (gesteuert(teile) && !EXAVA_WERKZEUGE.has(teile.werkzeug) && !EXAVA_BEKANNT.has(teile.werkzeug)) return frei(); // A-531 AUSFUEHRUNG: Entscheidung bei x-ausfuehrung.mjs (Lease + Freigabe)
   if (teile.server === "exava") return nein(name, "die normale Verbindung „EXAVA“ ist in der Hintergrundarbeit gesperrt; EXAVA-Werkzeuge nur vom Connector „EXAVA Hintergrund“.");
   let server = teile.server, v;
@@ -765,13 +759,13 @@ function entscheideEingabe(eingabe, vertrag) {
     // Hauptsession 16.10.2026 (#1195): „EXAVA Hintergrund“ kann ebenfalls mit UUID erscheinen → nur die EXAVA_WERKZEUGE und nur ohne Namensgleichheit mit einem Vertragswerkzeug;
     // EXAVA erzwingt Profil, Lease und Rechte serverseitig (dieser Hook ist dort die zweite Schicht). Jedes andere EXAVA-Werkzeug per UUID bleibt gesperrt.
     if (treffer.length === 0 && scan) return teile.werkzeug === SCAN_EXAVA && eingabe.agent_type === SCAN_AGENT ? scanIngest(name, eingabe.tool_input, eingabe.agent_id) // A-901: wie EXAVA_WERKZEUGE per UUID
-      : eingabe.agent_type === DRIVE_AGENT && Object.hasOwn(DRIVE_EXAVA, teile.werkzeug) ? driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`); // A-930
-    if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return korbMeldung(name, teile.werkzeug, eingabe.tool_input) ?? verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? gelesenVonEntfernen(teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input);
+      : eingabe.agent_type === DRIVE_AGENT && Object.hasOwn(DRIVE_EXAVA, teile.werkzeug) ? driveBatchExava(name, teile.werkzeug, eingabe.tool_input, eingabe.agent_id) : nein(name, `im Helfer ${SCAN_AGENT} nur Drive lesend.`); // A-930
+    if (treffer.length === 0 && EXAVA_WERKZEUGE.has(teile.werkzeug)) return verbrauchMelden(teile.werkzeug, eingabe.tool_input, eingabe) ?? gelesenVonEntfernen(teile.werkzeug, eingabe.tool_input) ?? startAdresse(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length === 0) return fremdLesend(name, teile.werkzeug, eingabe.tool_input);
     if (treffer.length !== 1) return nein(name, "capability_missing: Connector mit UUID-Namen, Werkzeug mehrdeutig, gesperrt bis geprüft.");
     server = treffer[0];
   }
-  if (scan && !SCAN_SERVER.has(server)) return nein(name, `im Helfer ${SCAN_AGENT} nur Drive und Gmail lesend.`);
+  if (scan && !SCAN_SERVER.has(server)) return nein(name, `im Helfer ${SCAN_AGENT} nur Drive lesend.`);
   if (!VERTRAG_SERVER.has(server)) return server.startsWith("exava") ? nein(name, "EXAVA-Werkzeuge nur vom Connector „EXAVA Hintergrund“.") : fremdLesend(name, teile.werkzeug, eingabe.tool_input);
   v ??= vertrag ?? vertragLesen();
   const e = hat(v.server[server], teile.werkzeug) ? v.server[server][teile.werkzeug] : null;
