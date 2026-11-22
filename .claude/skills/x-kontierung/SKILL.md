@@ -1,6 +1,6 @@
 ---
 name: x-kontierung
-description: Für die Belege eines Kontierungsauftrags (höchstens 20) je Beleg das Original in Drive bzw. EXAVA lesen (Mails nur über mail_lesen) und genau eine begründete Kontierung mit Konfidenz über propose_booking abgeben – EXAVA bucht sie sofort (A-896) und prüft sie nach seinem Annahmevertrag ohne Nutzer, wenn sie eindeutig ist (konfidenz 1.0) oder eine Regel sie bestätigt; sonst bleibt sie Vorschlag, bestätigt und korrigiert wird über Speichern. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit skill x-kontierung.
+description: Für die Belege eines Kontierungsauftrags (höchstens 20) je Beleg das Original zuerst in EXAVA (archiv_suchen), Drive nur als Rückfall lesen (Mails nur über mail_lesen) und genau eine begründete Kontierung mit Konfidenz über propose_booking abgeben – EXAVA bucht sie sofort (A-896) und prüft sie nach seinem Annahmevertrag ohne Nutzer, wenn sie eindeutig ist (konfidenz 1.0) oder eine Regel sie bestätigt; sonst bleibt sie Vorschlag, bestätigt und korrigiert wird über Speichern. Verwenden nur in der EXAVA-Hintergrundarbeit bei Aufträgen mit skill x-kontierung.
 effort: max
 ---
 
@@ -10,12 +10,14 @@ Herkunft: `docs/x2/spike/mandant-repo/_claude/skills/x-kontierung/SKILL.md`, ang
 
 Jeder EXAVA-Aufruf trägt `job_id` und `lauf_id`, schreibende zusätzlich `lease_generation`, `lease_token` und einen eigenen `idempotency_key` (`kontierung:<job_id>:<beleg_id>:<versuch>`). Spätestens alle 60 Sekunden `mcp__EXAVA_Hintergrund__heartbeat_job`.
 
+**Such-Kaskade beim Suchen und Lesen (A-1169; Dokumente und Mails gehören zusammen):** 1. Orientierung – `brain_index` aus `arbeit_holen` bzw. `mcp__EXAVA_Hintergrund__read_knowledge(…, context_profile: "index", question)` mit Name oder Stichwort: Akte (`kontakt_id`), Gesellschaft, Projekt, Fakten, offene Posten; 2. ganzheitlich in EXAVA – `mcp__EXAVA_Hintergrund__archiv_suchen` (`akte`, `gesellschaft`, `von`/`bis`, `typ` aus 1.) UND `mcp__EXAVA_Hintergrund__mail_lesen` (`suche` mit Adresse, Domain bzw. Name der Akte): zum Dokument bzw. Beleg die Korrespondenz, zur Mail die Dokumente, Verträge und Belege (`mail` im Treffer, `dokument_id` am Anhang); 3. Drive bzw. OneDrive nur als Rückfall für ein ganz frisches, noch nicht synchronisiertes Dokument (Lücke laut `abdeckung`).
+
 ## 1. Auftrag
 `job.bezug.beleg_ids` (höchstens 20) und `job.bezug.belege` (je Beleg `beleg_id`, `version`, `datum`, `brutto_cent`, `waehrung`, `aussteller`, `nummer`, `quelle_ref`, `gesellschaft`). Die Kopfdaten dienen nur zur Orientierung. Andere Belege bearbeitest du nicht.
 `steuer_steckbrief` aus `arbeit_holen` nennt je Gesellschaft das Steuerprofil (`steuerprofil`, `bedeutung`, ab `gueltig_ab`; Belege davor nach `vorher`) und `projekte_abweichend` (KOST1 mit bzw. ohne Vorsteuer – Projekt vor Gesellschaft). Danach richten sich Vorsteuer und § 13b-Schlüssel; bei einer Gesellschaft ohne Vorsteuerabzug argumentierst du nie mit Netto-Vorteilen oder Vorsteuer.
 
 ## 2. Je Beleg das Original lesen
-1. Über `quelle_ref`: Drive → `mcp__Google_Drive__read_file_content(fileId)` bzw. `mcp__Google_Drive__get_file_metadata`; eine Gmail-Quelle (`gmail:`) nie über den Connector (E-1348) – das Original liegt in EXAVA (`read_knowledge`), die Mail liest `mail_lesen` (`suche`). Ohne `quelle_ref` oder ohne Treffer dort: im ganzen Speicher suchen – EXAVA (`read_knowledge`; Mails nur über `mail_lesen`), Drive, OneDrive; fehlt ein Connector: im Bericht nennen, kein Ersatzweg (E-1117).
+1. **Zuerst aus EXAVA (A-1169):** `mcp__EXAVA_Hintergrund__archiv_suchen` mit `q` (Belegnummer bzw. Aussteller), `betrag` und `von`/`bis` um das Belegdatum – Treffer mit `dokument_id` lesen (Text des Originals, anbieterneutral). Drive nur als Rückfall (`kein_text`, ganz frische Datei, Lücke laut `abdeckung`, `archiv_suchen` nicht verfügbar): über `quelle_ref` → `mcp__Google_Drive__read_file_content(fileId)` bzw. `mcp__Google_Drive__get_file_metadata`; eine Gmail-Quelle (`gmail:`) nie über den Connector (E-1348) – das Original liegt in EXAVA (`archiv_suchen`, `read_knowledge`), die Mail liest `mail_lesen` (`suche`). Ohne Treffer: im ganzen Speicher suchen – EXAVA (`archiv_suchen`, `read_knowledge`; Mails nur über `mail_lesen`), dann Drive, OneDrive; fehlt ein Connector: im Bericht nennen, kein Ersatzweg (E-1117).
 2. Ohne lesbares Original keine Kontierung – der Beleg wird übersprungen; nie aus den Kopfdaten raten.
 3. Optional `mcp__EXAVA_Hintergrund__read_knowledge(job_id, lauf_id, question, entity_refs, context_profile: "wissen")` für frühere Buchungen desselben Partners und Regeln.
 
@@ -29,7 +31,7 @@ Jeder EXAVA-Aufruf trägt `job_id` und `lauf_id`, schreibende zusätzlich `lease
 - **Pflichtangaben laut Original (A-967), immer mitgeben, soweit das Original sie nennt:** `ust_satz` (19 | 7 | 0; mehrere Sätze: weglassen), `netto_cent` und `ust_cent` (Gegenprobe Netto + USt = Brutto ± 1 Cent), `steuernummer_ustid` (des Ausstellers, USt-IdNr. vor Steuernummer), `leistungsdatum` (JJJJ-MM-TT bzw. JJJJ-MM; ohne eigene Angabe das Rechnungsdatum), `empfaenger` (laut Adressfeld). Papier-Wahrheit: auch bei einer Gesellschaft ohne Vorsteuerabzug gilt der Satz laut Original (die Steuerlogik macht die Buchung). Rechnung nur im Mailtext (z. B. Apple): der Mailtext ist das Original. Nichts geraten – EXAVA füllt damit vor der Buchung nur leere Felder am Beleg.
 - `begruendung` immer (Leistung laut Original, frühere Buchungen, angewandte Regel); `konfidenz` ehrlich (0–1), unter 0,7 mit Grund in `unsicherheiten`.
 - **`konfidenz: 1.0` heißt eindeutig – EXAVA prüft die Buchung dann ohne Menschen (A-1071):** nur nach dem Abschnitt „Eindeutig“ am Ende dieser Anweisung (Repo: `.claude/eindeutig.md`); sonst bleibt die Konfidenz unter 1,0 und der Grund steht in `unsicherheiten`.
-- `source_refs` nur aus dem Gelesenen: `{art: "drive", ref}`; `{art: "exava", ref}` nur mit der `quelle_ref` aus dem Bezug (eine Mail aus `mail_lesen` nennst du mit ihrer EXAVA-ID in der `begruendung`).
+- `source_refs` nur aus dem Gelesenen: `{art: "drive", ref}`; `{art: "exava", ref}` mit der `quelle_ref` aus dem Bezug bzw. der `dokument_id` aus `archiv_suchen` (eine Mail aus `mail_lesen` nennst du mit ihrer EXAVA-ID in der `begruendung`).
 
 ## 4. Fehler
 - `konto_unbekannt`, `konto_reserviert`, `konto_automatik_ohne_bu`, `bu_unbekannt`, `reverse_charge_*` (Land, USt-IdNr., BU laut Ablehnung): genau einmal korrigieren (neuer `idempotency_key`), sonst überspringen.
@@ -38,4 +40,4 @@ Jeder EXAVA-Aufruf trägt `job_id` und `lauf_id`, schreibende zusätzlich `lease
 
 ## 5. Abschluss
 `mcp__EXAVA_Hintergrund__complete_job` mit `counters` (`gesichtet`, `verarbeitet`, `fehler`) und `result_refs` (je Kontierung `{art: "kontierung", id: <vorschlag_id>}`); `outcome: completed` (auch ohne Kontierung, dann `result_refs: []` und `counters.gesichtet` ≥ 1); abgebrochen → `partial` mit `grund`.
-- Drive nicht erreichbar → `outcome: failed`, `fehler_text: "connector_fehlt: Drive"` (kein `completed`; kein Ersatzweg, E-1117); Mails nie über einen Connector.
+- Drive nicht erreichbar → `outcome: failed`, `fehler_text: "connector_fehlt: Drive"` (kein `completed`; kein Ersatzweg, E-1117) – nur, wenn ein Original nur dort liegt (Rückfall nach Schritt 2.1); genügt das Archiv, nennst du es nur im Bericht; Mails nie über einen Connector.
